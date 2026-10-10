@@ -94,6 +94,23 @@ export function periodRange(period: Period, now: number = Date.now()): { start: 
   }
 }
 
+/** The whole of the day before `now`. */
+export function yesterdayRange(now: number = Date.now()): { start: number; end: number } {
+  const start = startOfDay(now) - DAY;
+  return { start, end: start + DAY - 1 };
+}
+
+/**
+ * A custom range snapped to whole local days. `from`/`to` are any timestamps
+ * inside the desired days; the result is [start of `from`, end of `to`]. If the
+ * caller passes them the wrong way round we swap, so the range is never empty.
+ */
+export function customRange(from: number, to: number): { start: number; end: number } {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  return { start: startOfDay(lo), end: endOfDay(hi) };
+}
+
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }

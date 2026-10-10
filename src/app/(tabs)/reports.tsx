@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Badge } from '@/components/Badge';
@@ -17,14 +18,25 @@ import {
   type ReportPeriod,
 } from '@/db/repositories/reportsRepo';
 import { listSales } from '@/db/repositories/salesRepo';
-import { periodRange, formatDateTime } from '@/lib/dates';
+import { canViewProfit } from '@/features/reports/reportMath';
+import {
+  DAY,
+  customRange,
+  formatDate,
+  formatDateTime,
+  formatDayShort,
+  periodRange,
+  yesterdayRange,
+} from '@/lib/dates';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
 
 const PERIODS: { value: ReportPeriod; label: string }[] = [
   { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
   { value: 'week', label: 'This week' },
   { value: 'month', label: 'This month' },
+  { value: 'custom', label: 'Custom' },
 ];
 
 const METHOD_LABEL: Record<string, string> = {
@@ -38,21 +50,52 @@ export default function ReportsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const [period, setPeriod] = useState<ReportPeriod>('today');
+  const [customFrom, setCustomFrom] = useState(() => Date.now() - 6 * DAY);
+  const [customTo, setCustomTo] = useState(() => Date.now());
 
-  const { start, end } = useMemo(() => periodRange(period), [period]);
+  const range = useMemo(() => {
+    switch (period) {
+      case 'yesterday':
+        return yesterdayRange();
+      case 'week':
+        return periodRange('week');
+      case 'month':
+        return periodRange('month');
+      case 'custom':
+        return customRange(customFrom, customTo);
+      case 'today':
+      default:
+        return periodRange('today');
+    }
+  }, [period, customFrom, customTo]);
 
-  const { data: report, isLoading } = useLiveQuery(() => getReport(start, end), [start, end]);
+  const { data: report, isLoading } = useLiveQuery(
+    () => getReport(range.start, range.end),
+    [range.start, range.end],
+  );
   const { data: eod } = useLiveQuery(() => getEndOfDaySummary(), [period]);
-  const { data: sales } = useLiveQuery(() => listSales({ start, end, limit: 15 }), [start, end]);
+  const { data: sales } = useLiveQuery(
+    () => listSales({ start: range.start, end: range.end, limit: 15 }),
+    [range.start, range.end],
+  );
 
+  const showProfit = canViewProfit();
   const profitMargin =
-    report && report.totalSales > 0
-      ? Math.round((report.estimatedProfit / report.totalSales) * 100)
-      : 0;
+    report && report.totalSales > 0 ? Math.round((report.profit / report.totalSales) * 100) : 0;
+  const maxDayTotal = report ? Math.max(...report.daily.map((day) => day.total), 0) : 0;
+  const rangeLabel =
+    range.start === range.end ? formatDate(range.start) : `${formatDate(range.start)} – ${formatDate(range.end)}`;
 
   return (
-    <Screen title="Reports" subtitle="How the shop is doing">
+    <Screen title="Reports" subtitle={rangeLabel}>
       <ChipRow options={PERIODS} value={period} onChange={setPeriod} />
+
+      {period === 'custom' ? (
+        <View style={{ flexDirection: 'row', gap: theme.space(2) }}>
+          <RangeField label="From" value={customFrom} onChange={setCustomFrom} />
+          <RangeField label="To" value={customTo} onChange={setCustomTo} />
+        </View>
+      ) : null}
 
       <Card>
         <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: theme.space(3) }}>
@@ -76,15 +119,43 @@ export default function ReportsScreen() {
           tone="muted"
         />
         <KeyValueRow
-          label="Estimated profit"
-          value={`${formatMoney(report?.estimatedProfit ?? 0)}${profitMargin > 0 ? ` (${profitMargin}%)` : ''}`}
+          label="Collected (cash + transfer + POS)"
+          value={formatMoney(report?.collected.total ?? 0)}
           tone="muted"
         />
         <KeyValueRow
-          label="Money on credit"
-          value={formatMoney(report?.outstandingDebt ?? 0)}
+          label="Cash / Transfer / POS"
+          value={`${formatMoney(report?.collected.cash ?? 0)} · ${formatMoney(
+            report?.collected.transfer ?? 0,
+          )} · ${formatMoney(report?.collected.pos ?? 0)}`}
           tone="muted"
         />
+        <KeyValueRow
+          label="Credit given"
+          value={formatMoney(report?.creditGiven ?? 0)}
+          tone="warning"
+        />
+        {showProfit ? (
+          <>
+            <KeyValueRow
+              label="Cost of goods sold"
+              value={formatMoney(report?.costOfGoods ?? 0)}
+              tone="muted"
+            />
+            <KeyValueRow
+              label={`Profit${profitMargin > 0 ? ` (${profitMargin}%)` : ''}`}
+              value={formatMoney(report?.profit ?? 0)}
+              tone="success"
+            />
+          </>
+        ) : null}
+
+        {report && !report.reconciliation.ok ? (
+          <Text variant="caption" tone="danger" style={{ marginTop: theme.space(2) }}>
+            Heads up: collected + credit does not match total sales by{' '}
+            {formatMoney(Math.abs(report.reconciliation.difference))}.
+          </Text>
+        ) : null}
       </Card>
 
       {!isLoading && (report?.salesCount ?? 0) === 0 ? (
@@ -95,6 +166,99 @@ export default function ReportsScreen() {
           actionLabel="Go to Sell"
           onAction={() => router.replace('/')}
         />
+      ) : null}
+
+      <View style={{ gap: theme.space(2) }}>
+        <SectionTitle>Money received on old debts</SectionTitle>
+        <Card>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: theme.space(3) }}>
+            <View style={{ flex: 1 }}>
+              <Text variant="label" tone="muted">
+                Total received
+              </Text>
+              <Text variant="moneyLarge" tone="success">
+                {formatMoney(report?.debtPayments.total ?? 0)}
+              </Text>
+            </View>
+            <Badge
+              label={`${report?.debtPayments.count ?? 0} payment${
+                report?.debtPayments.count === 1 ? '' : 's'
+              }`}
+              tone="success"
+            />
+          </View>
+          <Text variant="caption" tone="faint" style={{ marginTop: theme.space(2) }}>
+            Counted on the day each payment was received, including backdated ones.
+          </Text>
+        </Card>
+      </View>
+
+      <View style={{ gap: theme.space(2) }}>
+        <SectionTitle>Outstanding debt</SectionTitle>
+        <Pressable
+          onPress={() => router.push({ pathname: '/customers', params: { view: 'owing' } })}
+          style={({ pressed }) => ({
+            borderRadius: theme.radius.lg,
+            backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent',
+          })}
+        >
+          <Card tone="alt">
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(3) }}>
+              <View style={{ flex: 1 }}>
+                <Text variant="label" tone="muted">
+                  Owed to you right now
+                </Text>
+                <Text variant="moneyLarge" tone="warning">
+                  {formatMoney(report?.outstandingDebt ?? 0)}
+                </Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text variant="label" tone="accent">
+                  Debtors
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={theme.colors.accent} />
+              </View>
+            </View>
+          </Card>
+        </Pressable>
+      </View>
+
+      {report && report.daily.length > 0 && maxDayTotal > 0 ? (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Sales per day</SectionTitle>
+          <Card>
+            <View style={{ gap: theme.space(3) }}>
+              {report.daily.map((day) => (
+                <View key={day.day} style={{ gap: 4 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+                    <Text variant="caption" tone="muted">
+                      {formatDayShort(day.day)}
+                    </Text>
+                    <Text variant="caption" tone="muted">
+                      {formatMoney(day.total)} · {day.count} sale{day.count === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  <View
+                    style={{
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: theme.colors.surfaceAlt,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <View
+                      style={{
+                        height: '100%',
+                        width: `${maxDayTotal > 0 ? Math.round((day.total / maxDayTotal) * 100) : 0}%`,
+                        backgroundColor: theme.colors.primary,
+                      }}
+                    />
+                  </View>
+                </View>
+              ))}
+            </View>
+          </Card>
+        </View>
       ) : null}
 
       {report && report.byMethod.length > 0 ? (
@@ -134,7 +298,7 @@ export default function ReportsScreen() {
 
       {report && report.topSellers.length > 0 ? (
         <View style={{ gap: theme.space(2) }}>
-          <SectionTitle>Top sellers</SectionTitle>
+          <SectionTitle>Top sellers (by quantity)</SectionTitle>
           <Card padded={false}>
             {report.topSellers.map((seller, index) => (
               <View
@@ -178,7 +342,7 @@ export default function ReportsScreen() {
         <View style={{ gap: theme.space(2) }}>
           <SectionTitle>Low stock</SectionTitle>
           <Card padded={false}>
-            {report.lowStock.slice(0, 8).map((item, index) => (
+            {report.lowStock.map((item, index) => (
               <Pressable
                 key={item.id}
                 onPress={() => router.push(`/item/${item.id}`)}
@@ -199,7 +363,7 @@ export default function ReportsScreen() {
                     {item.name}
                   </Text>
                   <Text variant="caption" tone="muted">
-                    reorder at {item.lowStockLevel}
+                    alert at {item.lowStockLevel}
                   </Text>
                 </View>
                 <Badge label={`${item.stock} left`} tone="warning" />
@@ -247,5 +411,57 @@ export default function ReportsScreen() {
         </View>
       ) : null}
     </Screen>
+  );
+}
+
+function RangeField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (ts: number) => void;
+}) {
+  const theme = useTheme();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <View style={{ flex: 1, gap: theme.space(2) }}>
+      <Text variant="label" tone="muted">
+        {label}
+      </Text>
+      <Pressable
+        onPress={() => setOpen(true)}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: theme.space(2),
+          minHeight: theme.tapTarget,
+          paddingHorizontal: theme.space(3),
+          borderRadius: theme.radius.md,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+          backgroundColor: pressed ? theme.colors.surfacePressed : theme.colors.surface,
+        })}
+      >
+        <Ionicons name="calendar-outline" size={18} color={theme.colors.textMuted} />
+        <Text variant="bodyMedium" style={{ flex: 1 }} numberOfLines={1}>
+          {formatDate(value)}
+        </Text>
+      </Pressable>
+      {open ? (
+        <DateTimePicker
+          value={new Date(value)}
+          mode="date"
+          display="default"
+          maximumDate={new Date()}
+          onChange={(_event, selected) => {
+            setOpen(false);
+            if (selected) onChange(selected.getTime());
+          }}
+        />
+      ) : null}
+    </View>
   );
 }

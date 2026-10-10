@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Badge } from '@/components/Badge';
@@ -25,9 +25,14 @@ const VIEWS: { value: 'all' | 'owing'; label: string }[] = [
 export default function CustomersScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
   const [search, setSearch] = useState('');
   const [view, setView] = useState<'all' | 'owing'>('all');
   const debtorsOnly = view === 'owing';
+
+  useEffect(() => {
+    if (viewParam === 'owing') setView('owing');
+  }, [viewParam]);
 
   const { data: customers, isLoading } = useLiveQuery(
     () => listCustomers({ search, owingOnly: debtorsOnly }),

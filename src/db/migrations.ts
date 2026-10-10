@@ -227,6 +227,18 @@ export const MIGRATIONS: Migration[] = [
       UPDATE settings SET shop_phone = '' WHERE shop_phone IS NULL;
     `,
   },
+  {
+    version: 6,
+    name: 'report_indexes',
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_payments_paid_at
+        ON payments(paid_at);
+      CREATE INDEX IF NOT EXISTS idx_payments_sale_paid_at
+        ON payments(sale_id, paid_at);
+      CREATE INDEX IF NOT EXISTS idx_sales_status_sold_at
+        ON sales(status, sold_at);
+    `,
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

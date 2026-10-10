@@ -1,10 +1,19 @@
 import { getDb } from '../index';
 import { mapItemWithStock, type ItemRow } from '../mappers';
+import { DAY_MS, fillDailyBuckets, reconcileSales, type DailyBucket, type Reconciliation } from '@/features/reports/reportMath';
 import type { ItemWithStock, PaymentMethod } from '../types';
 
-export type ReportPeriod = 'today' | 'week' | 'month';
+export type ReportPeriod = 'today' | 'yesterday' | 'week' | 'month' | 'custom';
 
 export type MethodTotal = { method: PaymentMethod; amount: number };
+
+export type CollectedByMethod = {
+  cash: number;
+  transfer: number;
+  pos: number;
+  /** cash + transfer + POS. */
+  total: number;
+};
 
 export type TopSeller = {
   itemId: string;
@@ -20,11 +29,22 @@ export type ReportData = {
   totalSales: number;
   salesCount: number;
   itemsSoldCount: number;
+  /** Every payment method used by sales in the range (credit included). */
   byMethod: MethodTotal[];
-  estimatedProfit: number;
+  /** Money actually collected on sales in the range (credit excluded). */
+  collected: CollectedByMethod;
+  /** Unpaid part of credit / part-payment sales in the range. */
+  creditGiven: number;
+  costOfGoods: number;
+  profit: number;
+  /** Payments received against older debts, by the payment's own date. */
+  debtPayments: { count: number; total: number };
   topSellers: TopSeller[];
   lowStock: ItemWithStock[];
   outstandingDebt: number;
+  daily: DailyBucket[];
+  /** Self-check: collected + creditGiven must equal totalSales. */
+  reconciliation: Reconciliation;
 };
 
 const OWED_SUBQUERY = `
@@ -77,6 +97,17 @@ export async function getReport(start: number, end: number): Promise<ReportData>
     end,
   );
 
+  const cost = await db.getFirstAsync<{ cogs: number }>(
+    `SELECT COALESCE(SUM(sl.unit_cost * sl.quantity_base), 0) AS cogs
+       FROM sale_lines sl
+       JOIN sales s ON s.id = sl.sale_id
+      WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
+        AND s.status = 'completed'
+        AND s.sold_at >= ? AND s.sold_at <= ?`,
+    start,
+    end,
+  );
+
   const profit = await db.getFirstAsync<{ profit: number }>(
     `SELECT COALESCE(SUM(sl.line_total - sl.unit_cost * sl.quantity_base), 0) AS profit
        FROM sale_lines sl
@@ -84,6 +115,17 @@ export async function getReport(start: number, end: number): Promise<ReportData>
       WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
         AND s.status = 'completed'
         AND s.sold_at >= ? AND s.sold_at <= ?`,
+    start,
+    end,
+  );
+
+  // Money put toward debts taken before this range. Keyed on the payment's own
+  // date, so backdated debt payments land on the day they were received.
+  const debt = await db.getFirstAsync<{ payment_count: number; total: number }>(
+    `SELECT COUNT(*) AS payment_count, COALESCE(SUM(amount), 0) AS total
+       FROM payments
+      WHERE deleted_at IS NULL AND sale_id IS NULL
+        AND paid_at >= ? AND paid_at <= ?`,
     start,
     end,
   );
@@ -107,23 +149,67 @@ export async function getReport(start: number, end: number): Promise<ReportData>
         AND s.status = 'completed'
         AND s.sold_at >= ? AND s.sold_at <= ?
       GROUP BY sl.item_id
-      ORDER BY revenue DESC, quantity_base DESC
-      LIMIT 5`,
+      ORDER BY quantity_base DESC, revenue DESC
+      LIMIT 10`,
     start,
     end,
   );
 
+  // Group sales into local days. The offset converts the stored UTC epoch to
+  // the device's local wall clock before splitting on day boundaries.
+  const offsetMs = -new Date(start).getTimezoneOffset() * 60_000;
+  const dayRows = await db.getAllAsync<{ day_index: number; day_count: number; total: number }>(
+    `SELECT CAST((s.sold_at + ?) / 86400000 AS INTEGER) AS day_index,
+            COUNT(*) AS day_count,
+            COALESCE(SUM(s.total), 0) AS total
+       FROM sales s
+      WHERE s.deleted_at IS NULL AND s.status = 'completed'
+        AND s.sold_at >= ? AND s.sold_at <= ?
+      GROUP BY day_index
+      ORDER BY day_index ASC`,
+    offsetMs,
+    start,
+    end,
+  );
+
+  const amountOf = (method: PaymentMethod) =>
+    methodRows.find((row) => row.method === method)?.amount ?? 0;
+
+  const collected: CollectedByMethod = {
+    cash: amountOf('cash'),
+    transfer: amountOf('transfer'),
+    pos: amountOf('pos'),
+    total: 0,
+  };
+  collected.total = collected.cash + collected.transfer + collected.pos;
+  const creditGiven = amountOf('credit');
+  const totalSales = totals?.total_sales ?? 0;
+
   const lowStock = await getLowStockItems();
-  const debt = await getOutstandingDebt();
+  const outstandingDebt = await getOutstandingDebt();
+
+  const daily = fillDailyBuckets(
+    start,
+    end,
+    dayRows.map((row) => ({
+      day: row.day_index * DAY_MS - offsetMs,
+      total: row.total,
+      count: row.day_count,
+    })),
+  );
 
   return {
     start,
     end,
-    totalSales: totals?.total_sales ?? 0,
+    totalSales,
     salesCount: totals?.sales_count ?? 0,
     itemsSoldCount: units?.items_sold ?? 0,
     byMethod: methodRows.filter((row) => row.amount > 0),
-    estimatedProfit: profit?.profit ?? 0,
+    collected,
+    creditGiven,
+    costOfGoods: cost?.cogs ?? 0,
+    profit: profit?.profit ?? 0,
+    debtPayments: { count: debt?.payment_count ?? 0, total: debt?.total ?? 0 },
     topSellers: topRows.map((row) => ({
       itemId: row.item_id,
       name: row.name ?? 'Deleted item',
@@ -132,7 +218,9 @@ export async function getReport(start: number, end: number): Promise<ReportData>
       saleCount: row.sale_count,
     })),
     lowStock,
-    outstandingDebt: debt,
+    outstandingDebt,
+    daily,
+    reconciliation: reconcileSales(totalSales, collected.total, creditGiven),
   };
 }
 
