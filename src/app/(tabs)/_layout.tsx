@@ -2,6 +2,8 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
+import { can } from '@/features/auth/permissions';
+import { useSessionStore } from '@/features/auth/sessionStore';
 import { useTheme } from '@/theme/theme';
 
 const ICONS: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: keyof typeof Ionicons.glyphMap }> = {
@@ -14,6 +16,10 @@ const ICONS: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: 
 
 export default function TabsLayout() {
   const theme = useTheme();
+  const currentUser = useSessionStore((state) => state.currentUser);
+
+  const showItems = can(currentUser, 'manage_items');
+  const showReports = can(currentUser, 'view_reports');
 
   return (
     <Tabs
@@ -46,15 +52,17 @@ export default function TabsLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="items"
-        options={{
-          title: 'Items',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? ICONS.items.active : ICONS.items.inactive} size={23} color={color} />
-          ),
-        }}
-      />
+      {showItems ? (
+        <Tabs.Screen
+          name="items"
+          options={{
+            title: 'Items',
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons name={focused ? ICONS.items.active : ICONS.items.inactive} size={23} color={color} />
+            ),
+          }}
+        />
+      ) : null}
       <Tabs.Screen
         name="customers"
         options={{
@@ -68,15 +76,17 @@ export default function TabsLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="reports"
-        options={{
-          title: 'Reports',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? ICONS.reports.active : ICONS.reports.inactive} size={23} color={color} />
-          ),
-        }}
-      />
+      {showReports ? (
+        <Tabs.Screen
+          name="reports"
+          options={{
+            title: 'Reports',
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons name={focused ? ICONS.reports.active : ICONS.reports.inactive} size={23} color={color} />
+            ),
+          }}
+        />
+      ) : null}
       <Tabs.Screen
         name="settings"
         options={{

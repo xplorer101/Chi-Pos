@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -18,7 +18,9 @@ import {
   type ReportPeriod,
 } from '@/db/repositories/reportsRepo';
 import { listSales } from '@/db/repositories/salesRepo';
-import { canViewProfit } from '@/features/reports/reportMath';
+import { can, canViewProfit } from '@/features/auth/permissions';
+import { useSessionStore } from '@/features/auth/sessionStore';
+import type { ActingUser } from '@/db/types';
 import {
   DAY,
   customRange,
@@ -47,11 +49,32 @@ const METHOD_LABEL: Record<string, string> = {
 };
 
 export default function ReportsScreen() {
+  const currentUser = useSessionStore((state) => state.currentUser);
+  if (!can(currentUser, 'view_reports')) {
+    return <Redirect href="/" />;
+  }
+  return <ReportsInner />;
+}
+
+function ReportsInner() {
   const theme = useTheme();
   const router = useRouter();
+  const actor = useSessionStore((state) => state.currentUser) as ActingUser;
+  const users = useSessionStore((state) => state.users);
+  const showStaffFilter = users.length > 0;
+  const [staffId, setStaffId] = useState<string | null>(null);
   const [period, setPeriod] = useState<ReportPeriod>('today');
   const [customFrom, setCustomFrom] = useState(() => Date.now() - 6 * DAY);
   const [customTo, setCustomTo] = useState(() => Date.now());
+  const [costBackfill, setCostBackfill] = useState<number | null>(null);
+
+  const staffChip = useMemo(
+    () => [
+      { value: 'all', label: 'All staff' },
+      ...users.map((user) => ({ value: user.id, label: user.name })),
+    ],
+    [users],
+  );
 
   const range = useMemo(() => {
     switch (period) {
@@ -70,16 +93,32 @@ export default function ReportsScreen() {
   }, [period, customFrom, customTo]);
 
   const { data: report, isLoading } = useLiveQuery(
-    () => getReport(range.start, range.end),
-    [range.start, range.end],
+    () => getReport(actor, range.start, range.end, { userId: staffId ?? undefined }),
+    [range.start, range.end, staffId],
   );
-  const { data: eod } = useLiveQuery(() => getEndOfDaySummary(), [period]);
+  const { data: eod } = useLiveQuery(
+    () => getEndOfDaySummary(actor),
+    [period, staffId],
+  );
   const { data: sales } = useLiveQuery(
-    () => listSales({ start: range.start, end: range.end, limit: 15 }),
+    () => listSales(actor, { start: range.start, end: range.end, limit: 15 }),
     [range.start, range.end],
   );
 
-  const showProfit = canViewProfit();
+  useEffect(() => {
+    let mounted = true;
+    void import('@/db/repositories/auditRepo')
+      .then(({ getCostBackfillCount }) => getCostBackfillCount())
+      .then((count) => {
+        if (mounted && count > 0) setCostBackfill(count);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const showProfit = canViewProfit(actor);
   const profitMargin =
     report && report.totalSales > 0 ? Math.round((report.profit / report.totalSales) * 100) : 0;
   const maxDayTotal = report ? Math.max(...report.daily.map((day) => day.total), 0) : 0;
@@ -89,6 +128,21 @@ export default function ReportsScreen() {
   return (
     <Screen title="Reports" subtitle={rangeLabel}>
       <ChipRow options={PERIODS} value={period} onChange={setPeriod} />
+
+      {showStaffFilter && users.length > 1 ? (
+        <ChipRow
+          options={staffChip}
+          value={staffId ?? 'all'}
+          onChange={(value) => setStaffId(value === 'all' ? null : value)}
+        />
+      ) : null}
+
+      {costBackfill != null ? (
+        <Text variant="caption" tone="warning">
+          {costBackfill} sale line{costBackfill === 1 ? '' : 's'} had their cost estimated from the
+          current item cost (they were sold before costs were tracked).
+        </Text>
+      ) : null}
 
       {period === 'custom' ? (
         <View style={{ flexDirection: 'row', gap: theme.space(2) }}>
@@ -400,6 +454,7 @@ export default function ReportsScreen() {
                   <Text variant="caption" tone="muted">
                     {formatDateTime(sale.soldAt)} · {sale.itemCount} line
                     {sale.itemCount === 1 ? '' : 's'}
+                    {sale.servedByName ? ` · Served by ${sale.servedByName}` : ''}
                   </Text>
                 </View>
                 <Text variant="moneySmall" style={{ fontFamily: theme.font.semibold }}>

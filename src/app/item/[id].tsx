@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, Vibration, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Badge } from '@/components/Badge';
@@ -25,15 +25,28 @@ import {
   updateItem,
   type ItemUnitInput,
 } from '@/db/repositories/itemsRepo';
+import { can } from '@/features/auth/permissions';
+import { useSessionStore } from '@/features/auth/sessionStore';
 import { formatDateTime } from '@/lib/dates';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
+import type { ActingUser } from '@/db/types';
 
 type UnitDraft = ItemUnitInput;
 
 export default function ItemScreen() {
+  const currentUser = useSessionStore((state) => state.currentUser);
+  if (!can(currentUser, 'manage_items')) {
+    return <Redirect href="/" />;
+  }
+  return <ItemScreenInner />;
+}
+
+function ItemScreenInner() {
   const theme = useTheme();
   const router = useRouter();
+  const currentUser = useSessionStore((state) => state.currentUser);
+  const actor = currentUser as ActingUser;
   const { id, barcode: barcodeParam } = useLocalSearchParams<{ id: string; barcode?: string }>();
   const itemId = String(id ?? 'new');
   const isNew = itemId === 'new';
@@ -176,9 +189,9 @@ export default function ItemScreen() {
         units: draftUnits,
       };
       if (isNew) {
-        await createItem(payload);
+        await createItem(actor, payload);
       } else {
-        await updateItem(itemId, payload);
+        await updateItem(actor, itemId, payload);
       }
       router.back();
     } catch (caught) {
@@ -186,7 +199,7 @@ export default function ItemScreen() {
     } finally {
       setSaving(false);
     }
-  }, [category, costPrice, isNew, itemId, lowStockLevel, name, router, sellingPrice, tracksStock, units]);
+  }, [actor, category, costPrice, isNew, itemId, lowStockLevel, name, router, sellingPrice, tracksStock, units]);
 
   const remove = () => {
     Alert.alert('Delete item?', `${name} will be removed from your catalogue. Stock history is kept.`, [
@@ -195,7 +208,7 @@ export default function ItemScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          void deleteItem(itemId).then(() => router.back());
+          void deleteItem(actor, itemId).then(() => router.back());
         },
       },
     ]);
@@ -543,6 +556,7 @@ export default function ItemScreen() {
           <RestockSheet
             visible={restockOpen}
             onClose={() => setRestockOpen(false)}
+            actor={actor}
             itemId={itemId}
             itemName={name}
             units={units.map((unit) => ({
@@ -555,6 +569,7 @@ export default function ItemScreen() {
           <AdjustSheet
             visible={adjustOpen}
             onClose={() => setAdjustOpen(false)}
+            actor={actor}
             itemId={itemId}
             itemName={name}
             units={units.map((unit) => ({
@@ -582,12 +597,14 @@ type SimpleUnit = { id: string; unitName: string; unitsPerBase: number; sellingP
 function RestockSheet({
   visible,
   onClose,
+  actor,
   itemId,
   itemName,
   units,
 }: {
   visible: boolean;
   onClose: () => void;
+  actor: ActingUser;
   itemId: string;
   itemName: string;
   units: SimpleUnit[];
@@ -622,7 +639,7 @@ function RestockSheet({
     setSaving(true);
     setError(null);
     try {
-      await recordRestock({
+      await recordRestock(actor, {
         itemId,
         quantityBase,
         unitCost: perBase,
@@ -724,12 +741,14 @@ function RestockSheet({
 function AdjustSheet({
   visible,
   onClose,
+  actor,
   itemId,
   itemName,
   units,
 }: {
   visible: boolean;
   onClose: () => void;
+  actor: ActingUser;
   itemId: string;
   itemName: string;
   units: SimpleUnit[];
@@ -763,7 +782,7 @@ function AdjustSheet({
     setSaving(true);
     setError(null);
     try {
-      await recordAdjustment({ itemId, quantityBase: signedBase, reason: reason.trim() });
+      await recordAdjustment(actor, { itemId, quantityBase: signedBase, reason: reason.trim() });
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

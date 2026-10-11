@@ -55,12 +55,3 @@ export function fillDailyBuckets(
   }
   return days;
 }
-
-/**
- * Single gate for cost/profit visibility. Step 4 will make this owner-only;
- * today every device is the owner, so it always returns true. Keep every
- * cost/profit render behind this check.
- */
-export function canViewProfit(): boolean {
-  return true;
-}

@@ -173,6 +173,21 @@ export default function SellScreen() {
         </Pressable>
       </View>
 
+      <Pressable
+        onPress={() => router.push('/my-sales')}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+          opacity: pressed ? 0.6 : 1,
+        })}
+      >
+        <Ionicons name="receipt-outline" size={15} color={theme.colors.accent} />
+        <Text variant="caption" tone="accent">
+          My sales
+        </Text>
+      </Pressable>
+
       {trimmedQuery ? (
         <View style={{ gap: theme.space(2) }}>
           <SectionTitle>{results.length} result{results.length === 1 ? '' : 's'}</SectionTitle>

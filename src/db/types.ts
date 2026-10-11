@@ -10,12 +10,65 @@ export const PAYMENT_METHODS: PaymentMethod[] = ['cash', 'transfer', 'pos', 'cre
 
 export type SaleStatus = 'completed' | 'voided';
 
+export type Role = 'owner' | 'cashier';
+
 export interface BaseEntity {
   id: string;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
   deviceId: string;
+}
+
+export interface User extends BaseEntity {
+  name: string;
+  role: Role;
+  /** Salted PIN digest, or null when the user has no PIN yet. */
+  pinHash: string | null;
+  pinSalt: string | null;
+  /** Owner-only: salted digest of the one-time recovery code. */
+  recoveryHash: string | null;
+  recoverySalt: string | null;
+  isActive: boolean;
+  /** Consecutive wrong PIN attempts (reset on a good login). */
+  failedAttempts: number;
+  /** Epoch ms until which sign-in is refused, or null. */
+  lockedUntil: number | null;
+  lastLoginAt: number | null;
+}
+
+/** The signed-in user, as needed for permission checks and attribution. */
+export type ActingUser = {
+  id: string;
+  name: string;
+  role: Role;
+};
+
+export type AuditAction =
+  | 'void_sale'
+  | 'price_change'
+  | 'cost_change'
+  | 'stock_adjustment'
+  | 'item_delete'
+  | 'customer_delete'
+  | 'pin_reset'
+  | 'role_change'
+  | 'staff_add'
+  | 'staff_delete'
+  | 'backup'
+  | 'restore';
+
+export interface AuditEntry {
+  id: string;
+  userId: string | null;
+  userName: string;
+  userRole: string;
+  action: AuditAction;
+  entityType: string;
+  entityId: string | null;
+  summary: string;
+  detail: string | null;
+  createdAt: number;
 }
 
 export interface Settings extends BaseEntity {
@@ -28,6 +81,8 @@ export interface Settings extends BaseEntity {
   shopAddress: string;
   /** Business phone shown on receipts, optional. */
   shopPhone: string;
+  /** Lock after this many minutes of inactivity. Defaults to 5. */
+  autoLockMinutes: number;
 }
 
 export interface Item extends BaseEntity {
@@ -90,6 +145,12 @@ export interface Sale extends BaseEntity {
   status: SaleStatus;
   /** Business time of the sale (epoch ms). */
   soldAt: number;
+  /** Who rang up the sale. Null only on rows created before staff roles. */
+  userId: string | null;
+  /** Set when the sale is voided. */
+  voidReason: string | null;
+  voidedBy: string | null;
+  voidedAt: number | null;
 }
 
 export interface SaleLine extends BaseEntity {
@@ -107,6 +168,8 @@ export interface SaleLine extends BaseEntity {
   lineTotal: number;
   /** Cost per base unit at sale time, in kobo. */
   unitCost: number;
+  /** True when unit cost was back-filled from the item's current cost. */
+  costEstimated: boolean;
 }
 
 export interface Payment extends BaseEntity {
@@ -116,10 +179,16 @@ export interface Payment extends BaseEntity {
   amount: number;
   paidAt: number;
   note: string | null;
+  /** Who took the payment. Null only on rows created before staff roles. */
+  userId: string | null;
 }
 
 export interface SaleWithDetails extends Sale {
   lines: (SaleLine & { itemName: string })[];
   payments: Payment[];
   customerName: string | null;
+  /** Name of the user who rang up the sale, for the receipt. */
+  servedByName: string | null;
+  /** Name of the user who voided the sale, if voided. */
+  voidedByName: string | null;
 }

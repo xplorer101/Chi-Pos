@@ -1,32 +1,49 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Alert, View, type StyleProp, type ViewStyle } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import * as Sharing from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
 
 import { Button } from '@/components/Button';
+import { Card } from '@/components/Card';
 import { EmptyState } from '@/components/EmptyState';
+import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
+import { Sheet } from '@/components/Sheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
-import { getSaleWithDetails } from '@/db/repositories/salesRepo';
+import { getSaleWithDetails, voidSale } from '@/db/repositories/salesRepo';
 import { getSettings } from '@/db/repositories/settingsRepo';
+import { can } from '@/features/auth/permissions';
+import { useSessionStore } from '@/features/auth/sessionStore';
+import { showToast } from '@/components/Toast';
 import { formatMoney } from '@/lib/money';
 import { formatDateTime } from '@/lib/dates';
 import { useTheme } from '@/theme/theme';
+import type { ActingUser, SaleWithDetails } from '@/db/types';
 
 const PAPER_WIDTH = 340;
 
 export default function ReceiptScreen() {
+  const actor = useSessionStore((state) => state.currentUser) as ActingUser;
+  const { id } = useLocalSearchParams<{ id: string }>();
+
+  if (!can(actor, 'view_receipts')) {
+    return <Redirect href="/" />;
+  }
+  return <ReceiptInner actor={actor} saleId={String(id ?? '')} />;
+}
+
+function ReceiptInner({ actor, saleId }: { actor: ActingUser; saleId: string }) {
   const theme = useTheme();
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
   const [sharing, setSharing] = useState(false);
   const [sharingImage, setSharingImage] = useState(false);
+  const [voidOpen, setVoidOpen] = useState(false);
   const paperRef = useRef<View>(null);
 
-  const { data: sale, isLoading } = useLiveQuery(() => getSaleWithDetails(String(id ?? '')), [id]);
+  const { data: sale, isLoading } = useLiveQuery(() => getSaleWithDetails(saleId), [saleId]);
   const { data: settings } = useLiveQuery(() => getSettings(), []);
 
   const paymentLabel = useMemo(() => {
@@ -57,6 +74,7 @@ export default function ReceiptScreen() {
       `Receipt #${sale.receiptNo}`,
       formatDateTime(sale.soldAt),
       sale.customerName ? `Customer: ${sale.customerName}` : null,
+      sale.servedByName ? `Served by: ${sale.servedByName}` : null,
       '',
       lines,
       '',
@@ -161,6 +179,14 @@ export default function ReceiptScreen() {
             variant="secondary"
             onPress={() => router.replace('/')}
           />
+          {sale.status === 'completed' && can(actor, 'void_sale') ? (
+            <Button
+              label="Void sale"
+              variant="danger"
+              icon="close-circle-outline"
+              onPress={() => setVoidOpen(true)}
+            />
+          ) : null}
         </View>
       }
     >
@@ -206,7 +232,40 @@ export default function ReceiptScreen() {
                 Customer: {sale.customerName}
               </ReceiptText>
             ) : null}
+            {sale.servedByName ? (
+              <ReceiptText size={12} color="#566272">
+                Served by: {sale.servedByName}
+              </ReceiptText>
+            ) : null}
           </View>
+
+          {sale.status === 'voided' ? (
+            <View
+              style={{
+                borderWidth: 1,
+                borderColor: '#B3402C',
+                backgroundColor: '#FDEBE7',
+                borderRadius: 4,
+                padding: 8,
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              <ReceiptText size={13} color="#B3402C" bold>
+                VOIDED
+              </ReceiptText>
+              {sale.voidReason ? (
+                <ReceiptText size={11} color="#B3402C" center>
+                  {sale.voidReason}
+                </ReceiptText>
+              ) : null}
+              {sale.voidedByName ? (
+                <ReceiptText size={11} color="#B3402C" center>
+                  Voided by {sale.voidedByName} · {formatDateTime(sale.voidedAt ?? sale.soldAt)}
+                </ReceiptText>
+              ) : null}
+            </View>
+          ) : null}
 
           <View style={{ height: 1, backgroundColor: '#D9DEE5', marginVertical: 4 }} />
 
@@ -250,7 +309,94 @@ export default function ReceiptScreen() {
       <Text variant="caption" tone="faint" center>
         Share the receipt as an image or as text on WhatsApp.
       </Text>
+
+      {sale ? (
+        <VoidSaleSheet
+          visible={voidOpen}
+          sale={sale}
+          actor={actor}
+          onClose={() => setVoidOpen(false)}
+          onVoided={() => {
+            setVoidOpen(false);
+            router.replace('/');
+          }}
+        />
+      ) : null}
     </Screen>
+  );
+}
+
+function VoidSaleSheet({
+  visible,
+  sale,
+  actor,
+  onClose,
+  onVoided,
+}: {
+  visible: boolean;
+  sale: SaleWithDetails;
+  actor: ActingUser;
+  onClose: () => void;
+  onVoided: () => void;
+}) {
+  const theme = useTheme();
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setError(null);
+    setSaving(true);
+    try {
+      await voidSale(actor, sale.id, reason.trim());
+      showToast('Sale voided');
+      onVoided();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      title="Void this sale?"
+      subtitle={`Receipt #${sale.receiptNo} · ${formatMoney(sale.total)} — only the owner can do this.`}
+      dismissable={!saving}
+      footer={
+        <View style={{ gap: theme.space(2) }}>
+          {error ? (
+            <Text variant="label" tone="danger">
+              {error}
+            </Text>
+          ) : null}
+          <Button
+            label="Void sale"
+            variant="danger"
+            icon="close-circle-outline"
+            onPress={() => void submit()}
+            loading={saving}
+          />
+        </View>
+      }
+    >
+      <View style={{ gap: theme.space(3) }}>
+        <Card>
+          <Text variant="body" tone="muted">
+            Stock is put back and the sale leaves today&apos;s totals. A credit owed for this sale is
+            also cancelled. This is recorded in the audit log and cannot be undone.
+          </Text>
+        </Card>
+        <Input
+          label="Reason (optional)"
+          value={reason}
+          onChangeText={setReason}
+          placeholder="e.g. Wrong item entered, customer changed mind"
+          multiline
+        />
+      </View>
+    </Sheet>
   );
 }
 

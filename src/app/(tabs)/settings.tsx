@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Switch, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import * as Sharing from 'expo-sharing';
 
 import { Badge } from '@/components/Badge';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
+import { ChipRow } from '@/components/ChipRow';
 import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { Divider, KeyValueRow, SectionTitle } from '@/components/Section';
@@ -14,16 +16,33 @@ import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import { writeBackupFile } from '@/db/export';
 import { loadSampleData } from '@/db/seed';
-import { getSettings, setOwnerPin, updateSettings } from '@/db/repositories/settingsRepo';
-import { useAuthStore } from '@/features/auth/authStore';
-import { setBiometricsEnabled } from '@/features/auth/biometrics';
-import { isValidPin, verifyPin } from '@/lib/pin';
+import { getSettings, updateSettings } from '@/db/repositories/settingsRepo';
+import { changeOwnPin } from '@/db/repositories/usersRepo';
+import { promptBiometrics, setBiometricsEnabled } from '@/features/auth/biometrics';
+import { useSessionStore } from '@/features/auth/sessionStore';
+import { isValidPin } from '@/lib/pin';
+import { roleCaption, roleLabel } from '@/lib/roles';
 import { useTheme } from '@/theme/theme';
+import type { ActingUser } from '@/db/types';
+
+const AUTO_LOCK_OPTIONS = [1, 2, 5, 10, 15, 30].map((minutes) => ({
+  value: String(minutes),
+  label: `${minutes}m`,
+}));
 
 export default function SettingsScreen() {
+  const currentUser = useSessionStore((state) => state.currentUser);
+  if (!currentUser) return null;
+  return <SettingsInner actor={currentUser as ActingUser} />;
+}
+
+function SettingsInner({ actor }: { actor: ActingUser }) {
   const theme = useTheme();
-  const pinHash = useAuthStore((state) => state.pinHash);
-  const biometrics = useAuthStore((state) => state.biometrics);
+  const router = useRouter();
+  const biometrics = useSessionStore((state) => state.biometrics);
+  const setBiometrics = useSessionStore((state) => state.setBiometrics);
+
+  const isOwner = actor.role === 'owner';
 
   const { data: settings } = useLiveQuery(() => getSettings(), []);
 
@@ -33,6 +52,7 @@ export default function SettingsScreen() {
   const [shopPhone, setShopPhone] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [pinSheetOpen, setPinSheetOpen] = useState(false);
+  const [autoLockOpen, setAutoLockOpen] = useState(false);
   const [working, setWorking] = useState<string | null>(null);
 
   useEffect(() => {
@@ -70,30 +90,13 @@ export default function SettingsScreen() {
     }
   };
 
-  const removePin = () => {
-    Alert.alert('Remove PIN?', 'Anyone with this phone will be able to open the app.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove PIN',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            const updated = await setOwnerPin(null);
-            useAuthStore.setState({ pinHash: updated.ownerPinHash });
-            if (biometrics.enabled) await setBiometricsEnabled(false);
-            useAuthStore.setState({ biometrics: { available: biometrics.available, enabled: false } });
-          })();
-        },
-      },
-    ]);
-  };
-
   const toggleBiometrics = async (value: boolean) => {
     try {
       await setBiometricsEnabled(value);
-      useAuthStore.setState({
-        biometrics: { available: biometrics.available, enabled: value },
-      });
+      setBiometrics({ enabled: value });
+      if (value) {
+        void promptBiometrics();
+      }
     } catch {
       Alert.alert('Could not change setting', 'Biometric unlock is unavailable on this device.');
     }
@@ -111,7 +114,7 @@ export default function SettingsScreen() {
             void (async () => {
               setWorking('samples');
               try {
-                const count = await loadSampleData();
+                const count = await loadSampleData(actor);
                 Alert.alert('Done', `${count} sample item${count === 1 ? '' : 's'} added.`);
               } catch (error) {
                 Alert.alert('Could not load', error instanceof Error ? error.message : String(error));
@@ -146,125 +149,185 @@ export default function SettingsScreen() {
     })();
   };
 
+  const switchUser = () => {
+    Alert.alert('Switch user?', 'You will need the next person\u2019s PIN to get back in.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Lock now',
+        onPress: () => useSessionStore.getState().lock(),
+      },
+    ]);
+  };
+
   return (
     <Screen title="Settings" subtitle={settings?.shopName}>
       <View style={{ gap: theme.space(2) }}>
-        <SectionTitle>Shop profile</SectionTitle>
-        <Card>
-          <View style={{ gap: theme.space(3) }}>
-            <Input label="Shop name" value={shopName} onChangeText={setShopName} placeholder="My Shop" />
-            <Input
-              label="Receipt footer"
-              value={receiptFooter}
-              onChangeText={setReceiptFooter}
-              placeholder="Thank you for your patronage."
-              multiline
-            />
-            <Input
-              label="Shop address (optional)"
-              value={shopAddress}
-              onChangeText={setShopAddress}
-              placeholder="e.g. Market road, Lagos"
-              multiline
-            />
-            <Input
-              label="Shop phone (optional)"
-              value={shopPhone}
-              onChangeText={setShopPhone}
-              placeholder="e.g. 0803 123 4567"
-              keyboardType="phone-pad"
-            />
-            <Divider />
-            <KeyValueRow label="Business type" value="Provision shop" tone="muted" />
-            <KeyValueRow label="Currency" value="Naira (₦)" tone="muted" />
-            {dirty ? (
-              <Button
-                label="Save profile"
-                onPress={() => void saveProfile()}
-                loading={savingProfile}
-              />
-            ) : null}
-          </View>
-        </Card>
-      </View>
-
-      <View style={{ gap: theme.space(2) }}>
-        <SectionTitle>Security</SectionTitle>
+        <SectionTitle>Account</SectionTitle>
         <Card>
           <View style={{ gap: theme.space(3) }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(3) }}>
-              <View style={{ flex: 1 }}>
-                <Text variant="bodyMedium">
-                  {pinHash ? 'Change app PIN' : 'Protect the app with a PIN'}
-                </Text>
-                <Text variant="caption" tone="muted">
-                  {pinHash ? 'Required to open the app.' : 'Ask for a 4 to 6 digit PIN on launch.'}
+              <View
+                style={{
+                  width: theme.space(8),
+                  height: theme.space(8),
+                  borderRadius: theme.space(4),
+                  backgroundColor: theme.colors.accentSoft,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text variant="title" tone="accent">
+                  {actor.name.charAt(0).toUpperCase()}
                 </Text>
               </View>
-              {pinHash ? <Badge label="On" tone="success" /> : <Badge label="Off" tone="neutral" />}
+              <View style={{ flex: 1 }}>
+                <Text variant="bodyMedium">{actor.name}</Text>
+                <Text variant="caption" tone="muted">
+                  {roleLabel(actor.role)} · {roleCaption(actor.role)}
+                </Text>
+              </View>
+              <Badge label={roleLabel(actor.role)} tone={isOwner ? 'accent' : 'neutral'} />
             </View>
-
             <Button
-              label={pinHash ? 'Change PIN' : 'Set a PIN'}
+              label="Change my PIN"
               variant="secondary"
               icon="keypad-outline"
               onPress={() => setPinSheetOpen(true)}
             />
+            <Button
+              label="Switch user"
+              variant="outline"
+              icon="swap-horizontal"
+              onPress={switchUser}
+            />
+          </View>
+        </Card>
+      </View>
 
-            {pinHash ? (
-              <Button label="Remove PIN" variant="outline" onPress={removePin} />
-            ) : null}
-
-            <Divider />
-
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(3) }}>
-              <View style={{ flex: 1 }}>
-                <Text variant="bodyMedium">Unlock with fingerprint</Text>
-                <Text variant="caption" tone="muted">
-                  {biometrics.available
-                    ? pinHash
-                      ? 'Fingerprint or face scan instead of typing the PIN.'
-                      : 'Set a PIN first — the PIN is the fallback.'
-                    : 'No fingerprint sensor enrolled on this device.'}
-                </Text>
-              </View>
-              <Switch
-                value={biometrics.enabled}
-                disabled={!biometrics.available || !pinHash}
-                onValueChange={(value) => void toggleBiometrics(value)}
-                trackColor={{ true: theme.colors.primary, false: theme.colors.borderStrong }}
-                thumbColor={theme.colors.surface}
+      {isOwner ? (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Shop profile</SectionTitle>
+          <Card>
+            <View style={{ gap: theme.space(3) }}>
+              <Input label="Shop name" value={shopName} onChangeText={setShopName} placeholder="My Shop" />
+              <Input
+                label="Receipt footer"
+                value={receiptFooter}
+                onChangeText={setReceiptFooter}
+                placeholder="Thank you for your patronage."
+                multiline
               />
+              <Input
+                label="Shop address (optional)"
+                value={shopAddress}
+                onChangeText={setShopAddress}
+                placeholder="e.g. Market road, Lagos"
+                multiline
+              />
+              <Input
+                label="Shop phone (optional)"
+                value={shopPhone}
+                onChangeText={setShopPhone}
+                placeholder="e.g. 0803 123 4567"
+                keyboardType="phone-pad"
+              />
+              <Divider />
+              <KeyValueRow label="Business type" value="Provision shop" tone="muted" />
+              <KeyValueRow label="Currency" value="Naira (₦)" tone="muted" />
+              {dirty ? (
+                <Button
+                  label="Save profile"
+                  onPress={() => void saveProfile()}
+                  loading={savingProfile}
+                />
+              ) : null}
             </View>
-          </View>
-        </Card>
-      </View>
+          </Card>
+        </View>
+      ) : null}
 
-      <View style={{ gap: theme.space(2) }}>
-        <SectionTitle>Data</SectionTitle>
-        <Card>
-          <View style={{ gap: theme.space(3) }}>
-            <Button
-              label="Export backup (JSON)"
-              variant="secondary"
-              icon="share-outline"
-              onPress={exportBackup}
-              loading={working === 'export'}
-            />
-            <Button
-              label="Load sample data"
-              variant="secondary"
-              icon="download-outline"
-              onPress={loadSamples}
-              loading={working === 'samples'}
-            />
+      {isOwner ? (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Staff & security</SectionTitle>
+          <Card>
+            <View style={{ gap: theme.space(3) }}>
+              <Button
+                label="Manage staff & PIN resets"
+                variant="secondary"
+                icon="people-outline"
+                onPress={() => router.push('/staff')}
+              />
+              <Button
+                label={`Auto-lock: ${settings?.autoLockMinutes ?? 5} minutes`}
+                variant="secondary"
+                icon="timer-outline"
+                onPress={() => setAutoLockOpen(true)}
+              />
+              <Button
+                label="Audit log"
+                variant="secondary"
+                icon="receipt-outline"
+                onPress={() => router.push('/audit-log')}
+              />
+              <Divider />
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(3) }}>
+                <View style={{ flex: 1 }}>
+                  <Text variant="bodyMedium">Unlock with fingerprint</Text>
+                  <Text variant="caption" tone="muted">
+                    {biometrics.available
+                      ? 'Fingerprint or face scan instead of typing the PIN.'
+                      : 'No fingerprint sensor enrolled on this device.'}
+                  </Text>
+                </View>
+                <Switch
+                  value={biometrics.enabled}
+                  disabled={!biometrics.available}
+                  onValueChange={(value) => void toggleBiometrics(value)}
+                  trackColor={{ true: theme.colors.primary, false: theme.colors.borderStrong }}
+                  thumbColor={theme.colors.surface}
+                />
+              </View>
+            </View>
+          </Card>
+        </View>
+      ) : (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Security</SectionTitle>
+          <Card>
             <Text variant="caption" tone="muted">
-              Everything is stored on this device only. Nothing is sent anywhere — export a backup
-              before you clear the app or change phones.
+              Forgot your PIN? Ask the owner to reset it from Staff & security.
             </Text>
-          </View>
-        </Card>
-      </View>
+          </Card>
+        </View>
+      )}
+
+      {isOwner ? (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Data</SectionTitle>
+          <Card>
+            <View style={{ gap: theme.space(3) }}>
+              <Button
+                label="Export backup (JSON)"
+                variant="secondary"
+                icon="share-outline"
+                onPress={exportBackup}
+                loading={working === 'export'}
+              />
+              <Button
+                label="Load sample data"
+                variant="secondary"
+                icon="download-outline"
+                onPress={loadSamples}
+                loading={working === 'samples'}
+              />
+              <Text variant="caption" tone="muted">
+                Everything is stored on this device only. Nothing is sent anywhere — export a backup
+                before you clear the app or change phones.
+              </Text>
+            </View>
+          </Card>
+        </View>
+      ) : null}
 
       <View style={{ gap: theme.space(2) }}>
         <SectionTitle>About</SectionTitle>
@@ -277,26 +340,78 @@ export default function SettingsScreen() {
         </Card>
       </View>
 
-      <PinSheet
-        visible={pinSheetOpen}
-        onClose={() => setPinSheetOpen(false)}
-        hasPin={pinHash !== null}
-        currentHash={pinHash}
-      />
+      {isOwner ? (
+        <AutoLockSheet
+          visible={autoLockOpen}
+          onClose={() => setAutoLockOpen(false)}
+          current={settings?.autoLockMinutes ?? 5}
+        />
+      ) : null}
+
+      <ChangePinSheet visible={pinSheetOpen} onClose={() => setPinSheetOpen(false)} actor={actor} />
     </Screen>
   );
 }
 
-function PinSheet({
+function AutoLockSheet({
   visible,
   onClose,
-  hasPin,
-  currentHash,
+  current,
 }: {
   visible: boolean;
   onClose: () => void;
-  hasPin: boolean;
-  currentHash: string | null;
+  current: number;
+}) {
+  const theme = useTheme();
+  const [minutes, setMinutes] = useState(current);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible) setMinutes(current);
+  }, [visible, current]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await updateSettings({ autoLockMinutes: minutes });
+      useSessionStore.getState().setAutoLockMinutes(minutes);
+      onClose();
+    } catch (error) {
+      Alert.alert('Could not save', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Sheet
+      visible={visible}
+      onClose={onClose}
+      title="Auto-lock"
+      subtitle="Lock the app after this much inactivity, and immediately after the app is backgrounded for that long."
+      footer={
+        <Button label="Save" icon="checkmark" onPress={() => void save()} loading={saving} />
+      }
+    >
+      <View style={{ gap: theme.space(4) }}>
+        <ChipRow
+          options={AUTO_LOCK_OPTIONS}
+          value={String(minutes)}
+          onChange={(value) => setMinutes(Number(value))}
+        />
+      </View>
+    </Sheet>
+  );
+}
+
+function ChangePinSheet({
+  visible,
+  onClose,
+  actor,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  actor: ActingUser;
 }) {
   const theme = useTheme();
   const [current, setCurrent] = useState('');
@@ -316,10 +431,6 @@ function PinSheet({
 
   const submit = async () => {
     setError(null);
-    if (hasPin && !(await verifyPin(current, currentHash))) {
-      setError('Current PIN is not correct.');
-      return;
-    }
     if (!isValidPin(next)) {
       setError('New PIN must be 4 to 6 digits.');
       return;
@@ -330,8 +441,7 @@ function PinSheet({
     }
     setSaving(true);
     try {
-      const updated = await setOwnerPin(next);
-      useAuthStore.setState({ pinHash: updated.ownerPinHash });
+      await changeOwnPin(actor, current, next);
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -344,7 +454,7 @@ function PinSheet({
     <Sheet
       visible={visible}
       onClose={onClose}
-      title={hasPin ? 'Change PIN' : 'Set a PIN'}
+      title={`Change ${actor.role === 'owner' ? 'owner' : ''} PIN`}
       subtitle="Digits only, 4 to 6 characters"
       dismissable={!saving}
       footer={
@@ -359,17 +469,15 @@ function PinSheet({
       }
     >
       <View style={{ gap: theme.space(4) }}>
-        {hasPin ? (
-          <Input
-            label="Current PIN"
-            value={current}
-            onChangeText={setCurrent}
-            keyboardType="number-pad"
-            secureTextEntry
-            maxLength={6}
-            placeholder="••••"
-          />
-        ) : null}
+        <Input
+          label="Current PIN"
+          value={current}
+          onChangeText={setCurrent}
+          keyboardType="number-pad"
+          secureTextEntry
+          maxLength={6}
+          placeholder="••••"
+        />
         <Input
           label="New PIN"
           value={next}

@@ -1,5 +1,7 @@
 import { createItem, listItems, lookupBarcode, recordRestock } from './repositories/itemsRepo';
 import type { ItemUnitInput } from './repositories/itemsRepo';
+import { assertPermission } from '@/features/auth/permissions';
+import type { ActingUser } from './types';
 
 type SampleItem = {
   name: string;
@@ -133,7 +135,8 @@ const SAMPLE_ITEMS: SampleItem[] = [
 export const SAMPLE_ITEM_COUNT = SAMPLE_ITEMS.length;
 
 /** Returns how many items were actually created (duplicates are skipped). */
-export async function loadSampleData(): Promise<number> {
+export async function loadSampleData(actor: ActingUser): Promise<number> {
+  assertPermission(actor, 'manage_items');
   const existing = await listItems();
   const names = new Set(existing.map((item) => item.name.toLowerCase()));
 
@@ -153,7 +156,7 @@ export async function loadSampleData(): Promise<number> {
     }
     if (used) continue;
 
-    const item = await createItem({
+    const item = await createItem(actor, {
       name: sample.name,
       category: sample.category,
       tracksStock: true,
@@ -164,7 +167,7 @@ export async function loadSampleData(): Promise<number> {
     });
 
     if (sample.openingStock > 0) {
-      await recordRestock({
+      await recordRestock(actor, {
         itemId: item.id,
         quantityBase: sample.openingStock,
         unitCost: sample.costPrice,

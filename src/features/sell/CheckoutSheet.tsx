@@ -10,8 +10,10 @@ import { KeyValueRow } from '@/components/Section';
 import { Sheet } from '@/components/Sheet';
 import { Text } from '@/components/Text';
 import { createSale, SaleError } from '@/db/repositories/salesRepo';
+import { useSessionStore } from '@/features/auth/sessionStore';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
+import type { ActingUser } from '@/db/types';
 
 import { cartTotals, validatePaymentSplit, type CartLine as TotalsLine } from './cart';
 import {
@@ -53,6 +55,7 @@ const SPLIT_FIELDS: { key: keyof SplitAmounts; label: string }[] = [
 
 export function CheckoutSheet({ visible, onClose, onCompleted, onPickCustomer }: Props) {
   const theme = useTheme();
+  const actor = useSessionStore((state) => state.currentUser) as ActingUser;
   const lines = useSellStore((state) => state.lines);
   const discount = useSellStore((state) => state.discount);
   const customerId = useSellStore((state) => state.customerId);
@@ -101,7 +104,7 @@ export function CheckoutSheet({ visible, onClose, onCompleted, onPickCustomer }:
     setSubmitting(true);
     setError(null);
     try {
-      const sale = await createSale({
+      const sale = await createSale(actor, {
         customerId,
         discount: totals.discount,
         lines: lines.map((line) => ({

@@ -5,6 +5,11 @@ export type Migration = {
   name: string;
   /** SQL statements executed inside a single transaction. */
   sql: string;
+  /**
+   * Optional follow-up that runs inside the same transaction, for work that
+   * cannot be expressed as a single SQL statement (e.g. recording a count).
+   */
+  after?: (db: SQLiteDatabase) => Promise<void>;
 };
 
 /**
@@ -239,6 +244,90 @@ export const MIGRATIONS: Migration[] = [
         ON sales(status, sold_at);
     `,
   },
+  {
+    version: 7,
+    name: 'staff_roles_and_audit',
+    sql: `
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'cashier' CHECK (role IN ('owner','cashier')),
+        pin_hash TEXT,
+        pin_salt TEXT,
+        recovery_hash TEXT,
+        recovery_salt TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        locked_until INTEGER,
+        last_login_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted_at INTEGER,
+        device_id TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE TABLE audit_log (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_id TEXT,
+        user_name TEXT NOT NULL DEFAULT '',
+        user_role TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL DEFAULT '',
+        entity_id TEXT,
+        summary TEXT NOT NULL DEFAULT '',
+        detail TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE app_meta (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT,
+        updated_at INTEGER NOT NULL
+      );
+
+      ALTER TABLE sales ADD COLUMN user_id TEXT;
+      ALTER TABLE sales ADD COLUMN void_reason TEXT;
+      ALTER TABLE sales ADD COLUMN voided_by TEXT;
+      ALTER TABLE sales ADD COLUMN voided_at INTEGER;
+
+      ALTER TABLE payments ADD COLUMN user_id TEXT;
+
+      ALTER TABLE stock_movements ADD COLUMN user_id TEXT;
+
+      ALTER TABLE sale_lines ADD COLUMN cost_estimated INTEGER NOT NULL DEFAULT 0;
+
+      ALTER TABLE settings ADD COLUMN auto_lock_minutes INTEGER NOT NULL DEFAULT 5;
+
+      UPDATE sale_lines SET cost_estimated = 1
+       WHERE deleted_at IS NULL AND unit_cost = 0;
+
+      UPDATE sale_lines
+         SET unit_cost = COALESCE(
+           (SELECT i.cost_price FROM items i WHERE i.id = sale_lines.item_id), 0)
+       WHERE deleted_at IS NULL AND unit_cost = 0
+         AND EXISTS (
+           SELECT 1 FROM items i
+            WHERE i.id = sale_lines.item_id AND i.cost_price > 0
+         );
+
+      CREATE INDEX idx_users_role ON users(role, is_active);
+      CREATE INDEX idx_sales_user ON sales(user_id, sold_at);
+      CREATE INDEX idx_payments_user ON payments(user_id, paid_at);
+      CREATE INDEX idx_audit_created ON audit_log(created_at DESC);
+    `,
+    after: async (db) => {
+      const row = await db.getFirstAsync<{ c: number }>(
+        'SELECT COUNT(*) AS c FROM sale_lines WHERE cost_estimated = 1',
+      );
+      await db.runAsync(
+        `INSERT INTO app_meta (key, value, updated_at)
+         VALUES ('cost_backfill_count', ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        String(row?.c ?? 0),
+        Date.now(),
+      );
+    },
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -257,6 +346,7 @@ export async function migrate(db: SQLiteDatabase): Promise<void> {
   for (const migration of pending) {
     await db.withExclusiveTransactionAsync(async (txn) => {
       await txn.execAsync(migration.sql);
+      if (migration.after) await migration.after(txn);
       await txn.execAsync(`PRAGMA user_version = ${migration.version}`);
     });
   }

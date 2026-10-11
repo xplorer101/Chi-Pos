@@ -21,13 +21,25 @@ import {
   recordDebtPayment,
   updateCustomer,
 } from '@/db/repositories/customersRepo';
+import { can } from '@/features/auth/permissions';
+import { useSessionStore } from '@/features/auth/sessionStore';
 import { formatDateTime } from '@/lib/dates';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
+import type { ActingUser } from '@/db/types';
 
 export default function CustomerScreen() {
+  const currentUser = useSessionStore((state) => state.currentUser);
+  if (!can(currentUser, 'manage_customers')) {
+    return null;
+  }
+  return <CustomerScreenInner />;
+}
+
+function CustomerScreenInner() {
   const theme = useTheme();
   const router = useRouter();
+  const actor = useSessionStore((state) => state.currentUser) as ActingUser;
   const { id } = useLocalSearchParams<{ id: string }>();
   const customerId = String(id ?? 'new');
   const isNew = customerId === 'new';
@@ -69,9 +81,9 @@ export default function CustomerScreen() {
     setError(null);
     try {
       if (isNew) {
-        await createCustomer({ name: name.trim(), phone: phone.trim(), notes: notes.trim() });
+        await createCustomer(actor, { name: name.trim(), phone: phone.trim(), notes: notes.trim() });
       } else {
-        await updateCustomer(customerId, {
+        await updateCustomer(actor, customerId, {
           name: name.trim(),
           phone: phone.trim(),
           notes: notes.trim(),
@@ -95,7 +107,14 @@ export default function CustomerScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            void deleteCustomer(customerId).then(() => router.back());
+            void deleteCustomer(actor, customerId)
+              .then(() => router.back())
+              .catch((caught) => {
+                Alert.alert(
+                  'Cannot delete',
+                  caught instanceof Error ? caught.message : String(caught),
+                );
+              });
           },
         },
       ],
@@ -253,6 +272,7 @@ export default function CustomerScreen() {
           customerId={customerId}
           customerName={name}
           owed={owed}
+          actor={actor}
         />
       ) : null}
     </Screen>
@@ -265,12 +285,14 @@ function PaymentSheet({
   customerId,
   customerName,
   owed,
+  actor,
 }: {
   visible: boolean;
   onClose: () => void;
   customerId: string;
   customerName: string;
   owed: number;
+  actor: ActingUser;
 }) {
   const theme = useTheme();
   const [amount, setAmount] = useState(0);
@@ -299,7 +321,7 @@ function PaymentSheet({
     setSaving(true);
     setError(null);
     try {
-      await recordDebtPayment({
+      await recordDebtPayment(actor, {
         customerId,
         amount,
         method,

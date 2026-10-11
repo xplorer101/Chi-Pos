@@ -1,4 +1,5 @@
 import type {
+  AuditEntry,
   Customer,
   CustomerWithBalance,
   Item,
@@ -9,6 +10,7 @@ import type {
   SaleLine,
   Settings,
   StockMovement,
+  User,
 } from './types';
 
 /** Raw row shapes as they come back from SQLite (snake_case). */
@@ -21,10 +23,42 @@ export type SettingsRow = {
   receipt_footer: string;
   shop_address?: string | null;
   shop_phone?: string | null;
+  auto_lock_minutes?: number | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
   device_id: string;
+};
+
+export type UserRow = {
+  id: string;
+  name: string;
+  role: string;
+  pin_hash: string | null;
+  pin_salt: string | null;
+  recovery_hash: string | null;
+  recovery_salt: string | null;
+  is_active: number;
+  failed_attempts: number;
+  locked_until: number | null;
+  last_login_at: number | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  device_id: string;
+};
+
+export type AuditRow = {
+  id: string;
+  user_id: string | null;
+  user_name: string;
+  user_role: string;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  summary: string;
+  detail: string | null;
+  created_at: number;
 };
 
 export type ItemRow = {
@@ -92,6 +126,10 @@ export type SaleRow = {
   total: number;
   status: string;
   sold_at: number;
+  user_id?: string | null;
+  void_reason?: string | null;
+  voided_by?: string | null;
+  voided_at?: number | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -110,6 +148,7 @@ export type SaleLineRow = {
   unit_price: number;
   line_total: number;
   unit_cost: number;
+  cost_estimated?: number | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -125,6 +164,7 @@ export type PaymentRow = {
   amount: number;
   paid_at: number;
   note: string | null;
+  user_id?: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -159,6 +199,38 @@ export function mapSettings(row: SettingsRow): Settings {
     receiptFooter: row.receipt_footer,
     shopAddress: row.shop_address ?? '',
     shopPhone: row.shop_phone ?? '',
+    autoLockMinutes: row.auto_lock_minutes ?? 5,
+  };
+}
+
+export function mapUser(row: UserRow): User {
+  return {
+    ...baseFields(row),
+    name: row.name,
+    role: row.role as User['role'],
+    pinHash: row.pin_hash,
+    pinSalt: row.pin_salt,
+    recoveryHash: row.recovery_hash,
+    recoverySalt: row.recovery_salt,
+    isActive: row.is_active === 1,
+    failedAttempts: row.failed_attempts,
+    lockedUntil: row.locked_until,
+    lastLoginAt: row.last_login_at,
+  };
+}
+
+export function mapAuditEntry(row: AuditRow): AuditEntry {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name,
+    userRole: row.user_role,
+    action: row.action as AuditEntry['action'],
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    summary: row.summary,
+    detail: row.detail,
+    createdAt: row.created_at,
   };
 }
 
@@ -226,6 +298,10 @@ export function mapSale(row: SaleRow): Sale {
     total: row.total,
     status: row.status as Sale['status'],
     soldAt: row.sold_at,
+    userId: row.user_id ?? null,
+    voidReason: row.void_reason ?? null,
+    voidedBy: row.voided_by ?? null,
+    voidedAt: row.voided_at ?? null,
   };
 }
 
@@ -242,6 +318,7 @@ export function mapSaleLine(row: SaleLineRow): SaleLine & { itemName: string } {
     unitPrice: row.unit_price,
     lineTotal: row.line_total,
     unitCost: row.unit_cost,
+    costEstimated: (row.cost_estimated ?? 0) === 1,
     itemName: row.item_name ?? '',
   };
 }
@@ -255,5 +332,6 @@ export function mapPayment(row: PaymentRow): Payment {
     amount: row.amount,
     paidAt: row.paid_at,
     note: row.note,
+    userId: row.user_id ?? null,
   };
 }

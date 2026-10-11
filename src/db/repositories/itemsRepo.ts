@@ -1,3 +1,5 @@
+import { assertPermission } from '@/features/auth/permissions';
+
 import { getDb } from '../index';
 import {
   mapItemWithStock,
@@ -9,7 +11,8 @@ import {
 } from '../mappers';
 import { newRowMeta } from '../meta';
 import { bumpRevision } from '../store';
-import type { Item, ItemUnit, ItemWithStock, StockMovement } from '../types';
+import { recordAudit } from './auditRepo';
+import type { ActingUser, Item, ItemUnit, ItemWithStock, StockMovement } from '../types';
 
 export type ItemFilters = {
   search?: string;
@@ -248,7 +251,8 @@ async function assertUnitBarcodesUnique(
   }
 }
 
-export async function createItem(input: ItemInput): Promise<Item> {
+export async function createItem(actor: ActingUser, input: ItemInput): Promise<Item> {
+  assertPermission(actor, 'manage_items');
   const db = getDb();
   const meta = await newRowMeta();
   const units = normaliseUnits(input.units, input.sellingPrice);
@@ -300,11 +304,17 @@ export async function createItem(input: ItemInput): Promise<Item> {
   return created!;
 }
 
-export async function updateItem(id: string, input: ItemInput): Promise<Item> {
+export async function updateItem(
+  actor: ActingUser,
+  id: string,
+  input: ItemInput,
+): Promise<Item> {
+  assertPermission(actor, 'manage_items');
   const db = getDb();
   const now = Date.now();
   const units = normaliseUnits(input.units, input.sellingPrice);
   const existingUnits = await getItemUnits(id);
+  const oldItem = await getItem(id);
   const keptIds = new Set(units.map((u) => u.id).filter(Boolean));
   const freedUnitIds = new Set<string>();
   for (const old of existingUnits) {
@@ -394,13 +404,41 @@ export async function updateItem(id: string, input: ItemInput): Promise<Item> {
 
   bumpRevision();
   const updated = await getItem(id);
+  if (oldItem && updated) {
+    if (oldItem.costPrice !== updated.costPrice) {
+      await recordAudit({
+        user: actor,
+        action: 'cost_change',
+        entityType: 'item',
+        entityId: id,
+        summary: `Changed cost for "${updated.name}" from ${oldItem.costPrice} to ${updated.costPrice}`,
+      });
+    }
+    const newById = new Map(units.filter((u) => u.id).map((u) => [u.id as string, u]));
+    const unitPriceChanged = existingUnits.some((oldUnit) => {
+      const next = newById.get(oldUnit.id);
+      return next ? next.sellingPrice !== oldUnit.sellingPrice : true;
+    });
+    const unitAdded = units.some((u) => !u.id);
+    if (updated.sellingPrice !== oldItem.sellingPrice || unitPriceChanged || unitAdded) {
+      await recordAudit({
+        user: actor,
+        action: 'price_change',
+        entityType: 'item',
+        entityId: id,
+        summary: `Changed prices for "${updated.name}"`,
+      });
+    }
+  }
   return updated!;
 }
 
 /** Soft-delete an item together with its units. Stock history is kept. */
-export async function deleteItem(id: string): Promise<void> {
+export async function deleteItem(actor: ActingUser, id: string): Promise<void> {
+  assertPermission(actor, 'manage_items');
   const db = getDb();
   const now = Date.now();
+  const item = await getItem(id);
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync(
       'UPDATE items SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
@@ -414,6 +452,13 @@ export async function deleteItem(id: string): Promise<void> {
       now,
       id,
     );
+  });
+  await recordAudit({
+    user: actor,
+    action: 'item_delete',
+    entityType: 'item',
+    entityId: id,
+    summary: `Deleted item "${item?.name ?? 'unknown'}"`,
   });
   bumpRevision();
 }
@@ -431,12 +476,13 @@ export type RestockInput = {
  * Record a restock as a stock movement. The item's cost price follows the
  * last restock cost (last-cost valuation).
  */
-export async function recordRestock(input: RestockInput): Promise<void> {
+export async function recordRestock(actor: ActingUser, input: RestockInput): Promise<void> {
+  assertPermission(actor, 'adjust_stock');
   const quantity = Math.trunc(input.quantityBase);
   if (!Number.isFinite(quantity) || quantity <= 0) {
     throw new Error('Restock quantity must be greater than zero.');
   }
-  await recordMovement({
+  await recordMovement(actor, {
     itemId: input.itemId,
     type: 'restock',
     quantityBase: quantity,
@@ -455,7 +501,8 @@ export type AdjustmentInput = {
 };
 
 /** Record a manual stock adjustment (damage, expiry, stocktake, theft...). */
-export async function recordAdjustment(input: AdjustmentInput): Promise<void> {
+export async function recordAdjustment(actor: ActingUser, input: AdjustmentInput): Promise<void> {
+  assertPermission(actor, 'adjust_stock');
   const quantity = Math.trunc(input.quantityBase);
   if (!Number.isFinite(quantity) || quantity === 0) {
     throw new Error('Adjustment quantity cannot be zero.');
@@ -463,7 +510,7 @@ export async function recordAdjustment(input: AdjustmentInput): Promise<void> {
   if (!input.reason.trim()) {
     throw new Error('Please give a reason for the adjustment.');
   }
-  await recordMovement({
+  await recordMovement(actor, {
     itemId: input.itemId,
     type: 'adjustment',
     quantityBase: quantity,
@@ -473,14 +520,17 @@ export async function recordAdjustment(input: AdjustmentInput): Promise<void> {
   });
 }
 
-async function recordMovement(params: {
-  itemId: string;
-  type: 'restock' | 'adjustment';
-  quantityBase: number;
-  unitCost: number;
-  note: string | null;
-  updateCostPrice: boolean;
-}): Promise<void> {
+async function recordMovement(
+  actor: ActingUser,
+  params: {
+    itemId: string;
+    type: 'restock' | 'adjustment';
+    quantityBase: number;
+    unitCost: number;
+    note: string | null;
+    updateCostPrice: boolean;
+  },
+): Promise<void> {
   const db = getDb();
   const meta = await newRowMeta();
 
@@ -494,14 +544,15 @@ async function recordMovement(params: {
     await txn.runAsync(
       `INSERT INTO stock_movements
          (id, item_id, type, quantity_base, unit_cost, reference_id, note,
-          created_at, updated_at, deleted_at, device_id)
-       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?)`,
+          user_id, created_at, updated_at, deleted_at, device_id)
+       VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?)`,
       meta.id,
       params.itemId,
       params.type,
       params.quantityBase,
       params.unitCost,
       params.note,
+      actor.id,
       meta.now,
       meta.now,
       meta.deviceId,
@@ -517,6 +568,16 @@ async function recordMovement(params: {
     }
   });
 
+  const item = await getItem(params.itemId);
+  const direction = params.type === 'restock' ? 'Restocked' : 'Adjusted stock for';
+  await recordAudit({
+    user: actor,
+    action: 'stock_adjustment',
+    entityType: 'item',
+    entityId: params.itemId,
+    summary: `${direction} "${item?.name ?? 'item'}": ${params.quantityBase} base units`,
+    detail: params.note,
+  });
   bumpRevision();
 }
 

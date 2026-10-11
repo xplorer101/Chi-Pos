@@ -1,4 +1,6 @@
 import { cartTotals, validatePaymentSplit, type CartLine } from '@/features/sell/cart';
+import { assertPermission, can } from '@/features/auth/permissions';
+import { paymentReversalIds, voidDebtImpact, voidStockReversal } from '@/features/sales/voidMath';
 
 import type { SQLiteDatabase } from 'expo-sqlite';
 
@@ -13,7 +15,8 @@ import {
 } from '../mappers';
 import { newRowMeta } from '../meta';
 import { bumpRevision } from '../store';
-import type { PaymentMethod, Sale, SaleWithDetails } from '../types';
+import { recordAudit } from './auditRepo';
+import type { ActingUser, PaymentMethod, Sale, SaleWithDetails } from '../types';
 
 export type SaleLineInput = {
   itemId: string;
@@ -55,7 +58,11 @@ async function nextReceiptNo(txn: Pick<SQLiteDatabase, 'getFirstAsync'>): Promis
  * written inside a single exclusive transaction: a crash mid-way rolls the
  * whole thing back, so the database never holds a partial sale.
  */
-export async function createSale(input: CreateSaleInput): Promise<SaleWithDetails> {
+export async function createSale(
+  actor: ActingUser,
+  input: CreateSaleInput,
+): Promise<SaleWithDetails> {
+  assertPermission(actor, 'make_sale');
   const db = getDb();
   const meta = await newRowMeta();
   const soldAt = input.soldAt ?? meta.now;
@@ -167,8 +174,8 @@ export async function createSale(input: CreateSaleInput): Promise<SaleWithDetail
     await txn.runAsync(
       `INSERT INTO sales
          (id, receipt_no, customer_id, subtotal, discount, total, status, sold_at,
-          created_at, updated_at, deleted_at, device_id)
-       VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, NULL, ?)`,
+          user_id, created_at, updated_at, deleted_at, device_id)
+       VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, NULL, ?)`,
       saleId,
       receiptNo,
       input.customerId ?? null,
@@ -176,6 +183,7 @@ export async function createSale(input: CreateSaleInput): Promise<SaleWithDetail
       totals.discount,
       totals.total,
       soldAt,
+      actor.id,
       meta.now,
       meta.now,
       meta.deviceId,
@@ -211,13 +219,14 @@ export async function createSale(input: CreateSaleInput): Promise<SaleWithDetail
         await txn.runAsync(
           `INSERT INTO stock_movements
              (id, item_id, type, quantity_base, unit_cost, reference_id, note,
-              created_at, updated_at, deleted_at, device_id)
-           VALUES (?, ?, 'sale', ?, ?, ?, NULL, ?, ?, NULL, ?)`,
+              user_id, created_at, updated_at, deleted_at, device_id)
+           VALUES (?, ?, 'sale', ?, ?, ?, NULL, ?, ?, ?, NULL, ?)`,
           movementMeta.id,
           line.itemId,
           -line.quantityBase,
           line.unitCost,
           saleId,
+          actor.id,
           movementMeta.now,
           movementMeta.now,
           movementMeta.deviceId,
@@ -231,14 +240,15 @@ export async function createSale(input: CreateSaleInput): Promise<SaleWithDetail
       await txn.runAsync(
         `INSERT INTO payments
            (id, sale_id, customer_id, method, amount, paid_at, note,
-            created_at, updated_at, deleted_at, device_id)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?)`,
+            user_id, created_at, updated_at, deleted_at, device_id)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?)`,
         paymentMeta.id,
         saleId,
         input.customerId ?? null,
         payment.method,
         payment.amount,
         soldAt,
+        actor.id,
         paymentMeta.now,
         paymentMeta.now,
         paymentMeta.deviceId,
@@ -254,10 +264,16 @@ export async function createSale(input: CreateSaleInput): Promise<SaleWithDetail
 
 export async function getSaleWithDetails(id: string): Promise<SaleWithDetails | null> {
   const db = getDb();
-  const row = await db.getFirstAsync<SaleRow & { customer_name: string | null }>(
-    `SELECT s.*, c.name AS customer_name
+  const row = await db.getFirstAsync<
+    SaleRow & { customer_name: string | null; served_by_name: string | null; voided_by_name: string | null }
+  >(
+    `SELECT s.*, c.name AS customer_name,
+            u.name AS served_by_name,
+            uv.name AS voided_by_name
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
+       LEFT JOIN users u ON u.id = s.user_id
+       LEFT JOIN users uv ON uv.id = s.voided_by
       WHERE s.id = ? AND s.deleted_at IS NULL`,
     id,
   );
@@ -279,21 +295,38 @@ export async function getSaleWithDetails(id: string): Promise<SaleWithDetails | 
   return {
     ...mapSale(row),
     customerName: row.customer_name,
+    servedByName: row.served_by_name,
+    voidedByName: row.voided_by_name,
     lines: lineRows.map(mapSaleLine),
     payments: paymentRows.map(mapPayment),
   };
 }
 
-export type SaleListItem = Sale & { customerName: string | null; itemCount: number };
+export type SaleListItem = Sale & {
+  customerName: string | null;
+  itemCount: number;
+  servedByName: string | null;
+};
 
-export async function listSales(options: {
-  start?: number;
-  end?: number;
-  limit?: number;
-}): Promise<SaleListItem[]> {
+export async function listSales(
+  actor: ActingUser,
+  options: {
+    start?: number;
+    end?: number;
+    limit?: number;
+    /** Restrict to one user's sales. Omit for the actor's own sales. */
+    userId?: string;
+  },
+): Promise<SaleListItem[]> {
+  if (options.userId != null && options.userId !== actor.id) {
+    assertPermission(actor, 'view_all_sales');
+  } else {
+    assertPermission(actor, 'view_own_sales');
+  }
+
   const db = getDb();
   const where: string[] = ['s.deleted_at IS NULL'];
-  const params: number[] = [];
+  const params: (number | string)[] = [];
 
   if (options.start != null) {
     where.push('s.sold_at >= ?');
@@ -303,15 +336,26 @@ export async function listSales(options: {
     where.push('s.sold_at <= ?');
     params.push(options.end);
   }
+  // No user requested: the owner sees everyone, a cashier sees only their own.
+  const userId = options.userId ?? (can(actor, 'view_all_sales') ? null : actor.id);
+  if (userId != null) {
+    where.push('s.user_id = ?');
+    params.push(userId);
+  }
 
   const rows = await db.getAllAsync<
-    SaleRow & { customer_name: string | null; item_count: number }
+    SaleRow & {
+      customer_name: string | null;
+      item_count: number;
+      served_by_name: string | null;
+    }
   >(
-    `SELECT s.*, c.name AS customer_name,
+    `SELECT s.*, c.name AS customer_name, u.name AS served_by_name,
             (SELECT COUNT(*) FROM sale_lines sl
               WHERE sl.sale_id = s.id AND sl.deleted_at IS NULL) AS item_count
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
+       LEFT JOIN users u ON u.id = s.user_id
       WHERE ${where.join(' AND ')}
       ORDER BY s.sold_at DESC
       LIMIT ?`,
@@ -323,5 +367,104 @@ export async function listSales(options: {
     ...mapSale(row),
     customerName: row.customer_name,
     itemCount: row.item_count,
+    servedByName: row.served_by_name,
   }));
+}
+
+/**
+ * Void a completed sale. Nothing is hard-deleted: the sale is flagged with the
+ * reason and operator, sold stock returns via adjustment movements, and the
+ * sale's payments are soft-deleted so a customer's derived balance stays correct.
+ */
+export async function voidSale(
+  actor: ActingUser,
+  saleId: string,
+  reason: string,
+): Promise<SaleWithDetails> {
+  assertPermission(actor, 'void_sale');
+  const trimmed = reason.trim();
+  if (!trimmed) throw new SaleError('Enter a reason for voiding the sale.');
+
+  const db = getDb();
+  const row = await db.getFirstAsync<SaleRow>(
+    'SELECT * FROM sales WHERE id = ? AND deleted_at IS NULL',
+    saleId,
+  );
+  if (!row) throw new SaleError('That sale no longer exists.');
+  if (row.status !== 'completed') throw new SaleError('That sale is already voided.');
+
+  const lines = await db.getAllAsync<SaleLineRow>(
+    'SELECT * FROM sale_lines WHERE sale_id = ? AND deleted_at IS NULL',
+    saleId,
+  );
+  const payments = await db.getAllAsync<PaymentRow>(
+    'SELECT * FROM payments WHERE sale_id = ? AND deleted_at IS NULL',
+    saleId,
+  );
+
+  const movements = voidStockReversal(
+    lines.map((line) => ({ itemId: line.item_id, quantityBase: line.quantity_base })),
+  );
+  const paymentIds = paymentReversalIds(
+    payments.map((payment) => ({ id: payment.id, saleId: payment.sale_id })),
+    saleId,
+  );
+  const debtImpact = voidDebtImpact(row.total, payments);
+
+  const now = Date.now();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      `UPDATE sales
+          SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = ?, updated_at = ?
+        WHERE id = ?`,
+      trimmed,
+      actor.id,
+      now,
+      now,
+      saleId,
+    );
+
+    for (const movement of movements) {
+      const meta = await newRowMeta();
+      await txn.runAsync(
+        `INSERT INTO stock_movements
+           (id, item_id, type, quantity_base, unit_cost, reference_id, note,
+            user_id, created_at, updated_at, deleted_at, device_id)
+         VALUES (?, ?, 'adjustment', ?, 0, ?, 'Voided sale', ?, ?, ?, NULL, ?)`,
+        meta.id,
+        movement.itemId,
+        movement.quantityBase,
+        saleId,
+        actor.id,
+        meta.now,
+        meta.now,
+        meta.deviceId,
+      );
+    }
+
+    for (const paymentId of paymentIds) {
+      await txn.runAsync(
+        'UPDATE payments SET deleted_at = ?, updated_at = ? WHERE id = ?',
+        now,
+        now,
+        paymentId,
+      );
+    }
+  });
+
+  await recordAudit({
+    user: actor,
+    action: 'void_sale',
+    entityType: 'sale',
+    entityId: saleId,
+    summary:
+      `Voided receipt #${row.receipt_no}` +
+      (debtImpact > 0 ? ` (removed ${debtImpact} of outstanding credit)` : ''),
+    detail: trimmed,
+  });
+  bumpRevision();
+
+  const sale = await getSaleWithDetails(saleId);
+  if (!sale) throw new SaleError('Sale could not be read back.');
+  return sale;
 }

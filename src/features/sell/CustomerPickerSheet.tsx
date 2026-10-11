@@ -9,8 +9,10 @@ import { Text } from '@/components/Text';
 import { EmptyState } from '@/components/EmptyState';
 import { useLiveQuery } from '@/db/hooks';
 import { createCustomer, listCustomers } from '@/db/repositories/customersRepo';
+import { useSessionStore } from '@/features/auth/sessionStore';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
+import type { ActingUser } from '@/db/types';
 
 type Props = {
   visible: boolean;
@@ -21,6 +23,7 @@ type Props = {
 
 export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: Props) {
   const theme = useTheme();
+  const actor = useSessionStore((state) => state.currentUser) as ActingUser;
   const [search, setSearch] = useState('');
   const [showNew, setShowNew] = useState(false);
   const [newName, setNewName] = useState('');
@@ -48,7 +51,7 @@ export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: 
     setSaving(true);
     setError(null);
     try {
-      const customer = await createCustomer({ name: newName, phone: newPhone });
+      const customer = await createCustomer(actor, { name: newName, phone: newPhone });
       onSelect(customer.id, customer.name);
       reset();
       onClose();

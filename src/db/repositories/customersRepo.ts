@@ -1,3 +1,6 @@
+import { assertPermission } from '@/features/auth/permissions';
+import { customerDeleteBlocked } from '@/features/customers/customerDelete';
+
 import { getDb } from '../index';
 import {
   mapCustomerWithBalance,
@@ -9,7 +12,8 @@ import {
 } from '../mappers';
 import { newRowMeta } from '../meta';
 import { bumpRevision } from '../store';
-import type { Customer, CustomerWithBalance, Payment, Sale } from '../types';
+import { recordAudit } from './auditRepo';
+import type { ActingUser, Customer, CustomerWithBalance, Payment, Sale } from '../types';
 
 /**
  * A customer's balance is derived, never stored:
@@ -84,11 +88,15 @@ export async function getCustomerOwed(id: string): Promise<number> {
   return customer?.owed ?? 0;
 }
 
-export async function createCustomer(input: {
-  name: string;
-  phone?: string | null;
-  notes?: string | null;
-}): Promise<Customer> {
+export async function createCustomer(
+  actor: ActingUser,
+  input: {
+    name: string;
+    phone?: string | null;
+    notes?: string | null;
+  },
+): Promise<Customer> {
+  assertPermission(actor, 'manage_customers');
   const name = input.name.trim();
   if (!name) throw new Error('Customer name is required.');
   const meta = await newRowMeta();
@@ -110,9 +118,11 @@ export async function createCustomer(input: {
 }
 
 export async function updateCustomer(
+  actor: ActingUser,
   id: string,
   input: { name: string; phone?: string | null; notes?: string | null },
 ): Promise<Customer> {
+  assertPermission(actor, 'manage_customers');
   const name = input.name.trim();
   if (!name) throw new Error('Customer name is required.');
   const db = getDb();
@@ -130,7 +140,13 @@ export async function updateCustomer(
   return updated!;
 }
 
-export async function deleteCustomer(id: string): Promise<void> {
+export async function deleteCustomer(actor: ActingUser, id: string): Promise<void> {
+  assertPermission(actor, 'delete_customer');
+  const customer = await getCustomer(id);
+  if (!customer) throw new Error('That customer no longer exists.');
+  const blocked = customerDeleteBlocked(customer.owed);
+  if (blocked) throw new Error(blocked);
+
   const db = getDb();
   const now = Date.now();
   await db.runAsync(
@@ -139,6 +155,13 @@ export async function deleteCustomer(id: string): Promise<void> {
     now,
     id,
   );
+  await recordAudit({
+    user: actor,
+    action: 'customer_delete',
+    entityType: 'customer',
+    entityId: id,
+    summary: `Deleted customer "${customer.name}"`,
+  });
   bumpRevision();
 }
 
@@ -193,7 +216,11 @@ export type DebtPaymentInput = {
 };
 
 /** Record a payment against what a customer owes (reduces their balance). */
-export async function recordDebtPayment(input: DebtPaymentInput): Promise<void> {
+export async function recordDebtPayment(
+  actor: ActingUser,
+  input: DebtPaymentInput,
+): Promise<void> {
+  assertPermission(actor, 'record_debt_payment');
   const amount = Math.round(input.amount);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error('Payment amount must be greater than zero.');
@@ -213,14 +240,15 @@ export async function recordDebtPayment(input: DebtPaymentInput): Promise<void> 
     await txn.runAsync(
       `INSERT INTO payments
          (id, sale_id, customer_id, method, amount, paid_at, note,
-          created_at, updated_at, deleted_at, device_id)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+          user_id, created_at, updated_at, deleted_at, device_id)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
       meta.id,
       input.customerId,
       input.method,
       amount,
       paidAt ?? meta.now,
       input.note?.trim() || null,
+      actor.id,
       meta.now,
       meta.now,
       meta.deviceId,

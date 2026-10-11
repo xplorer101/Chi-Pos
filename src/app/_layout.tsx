@@ -1,21 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { AppState, View } from 'react-native';
+import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Stack } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 
-import { LockScreen } from '@/components/LockScreen';
 import { Text } from '@/components/Text';
 import { Toast } from '@/components/Toast';
 import { initDb } from '@/db';
-import { getSettings, getStoredPinHash } from '@/db/repositories/settingsRepo';
-import { useAuthStore } from '@/features/auth/authStore';
-import {
-  hasBiometricHardware,
-  isBiometricsEnabled,
-  promptBiometrics,
-} from '@/features/auth/biometrics';
+import { needsSetup } from '@/db/repositories/usersRepo';
+import { hasBiometricHardware, isBiometricsEnabled } from '@/features/auth/biometrics';
+import { OwnerSetup } from '@/features/auth/OwnerSetup';
+import { useSessionStore } from '@/features/auth/sessionStore';
+import { useAutoLock } from '@/features/auth/useAutoLock';
+import { UserSwitch } from '@/features/auth/UserSwitch';
 import { ThemeProvider, useTheme } from '@/theme/theme';
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -32,11 +30,7 @@ export default function RootLayout() {
 
 function RootGate() {
   const theme = useTheme();
-  const unlocked = useAuthStore((state) => state.unlocked);
-  const pinHash = useAuthStore((state) => state.pinHash);
-  const biometrics = useAuthStore((state) => state.biometrics);
-  const unlock = useAuthStore((state) => state.unlock);
-  const lock = useAuthStore((state) => state.lock);
+  const status = useSessionStore((state) => state.status);
 
   const [booted, setBooted] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -48,17 +42,21 @@ function RootGate() {
     (async () => {
       try {
         await initDb();
+        const [{ getSettings }] = await Promise.all([
+          import('@/db/repositories/settingsRepo'),
+        ]);
         const settings = await getSettings();
-        const hash = await getStoredPinHash();
+        if (mounted) setShopName(settings.shopName);
+        const setup = await needsSetup();
         const available = await hasBiometricHardware();
         const enabled = available ? await isBiometricsEnabled() : false;
         if (!mounted) return;
-        setShopName(settings.shopName);
-        useAuthStore.setState({
-          pinHash: hash,
-          biometrics: { available, enabled },
-          unlocked: hash === null,
-        });
+        useSessionStore.getState().setBiometrics({ available, enabled });
+        if (setup) {
+          useSessionStore.getState().goToSetup();
+        } else {
+          await useSessionStore.getState().boot();
+        }
       } catch (error) {
         if (!mounted) return;
         setBootError(error instanceof Error ? error.message : String(error));
@@ -74,14 +72,7 @@ function RootGate() {
     };
   }, []);
 
-  // Re-lock whenever the app is sent to the background (PIN enabled only).
-  useEffect(() => {
-    if (!booted || pinHash === null) return;
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'background') lock();
-    });
-    return () => subscription.remove();
-  }, [booted, pinHash, lock]);
+  useAutoLock();
 
   if (!booted) {
     return <View style={{ flex: 1, backgroundColor: theme.colors.bg }} />;
@@ -108,33 +99,33 @@ function RootGate() {
     );
   }
 
-  const needsLock = pinHash !== null && !unlocked;
-
   return (
     <>
       <StatusBar style="auto" />
       <Toast />
-      {needsLock ? (
-        <LockScreen
-          shopName={shopName}
-          pinHash={pinHash}
-          biometricsAvailable={biometrics.available}
-          biometricsEnabled={biometrics.enabled}
-          onUnlock={unlock}
-          onUseBiometrics={() => {
-            void promptBiometrics().then((ok) => {
-              if (ok) unlock();
-            });
-          }}
-        />
-      ) : (
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: theme.colors.bg },
-          }}
-        />
-      )}
+      {status === 'setup' ? (
+        <OwnerSetup />
+      ) : status === 'locked' ? (
+        <UserSwitch shopName={shopName} />
+      ) : status === 'unlocked' ? (
+        <>
+          <TouchOnNavigate />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: theme.colors.bg },
+            }}
+          />
+        </>
+      ) : null}
     </>
   );
+}
+
+function TouchOnNavigate() {
+  const pathname = usePathname();
+  useEffect(() => {
+    useSessionStore.getState().touch();
+  }, [pathname]);
+  return null;
 }

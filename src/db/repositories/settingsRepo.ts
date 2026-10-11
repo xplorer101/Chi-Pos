@@ -1,7 +1,3 @@
-import * as SecureStore from 'expo-secure-store';
-
-import { hashPin } from '@/lib/pin';
-
 import { getDb } from '../index';
 import { mapSettings, type SettingsRow } from '../mappers';
 import { newRowMeta } from '../meta';
@@ -9,7 +5,6 @@ import { bumpRevision } from '../store';
 import type { BusinessType, Settings } from '../types';
 
 const SETTINGS_ID = 'shop';
-const PIN_SECURE_STORE_KEY = 'owner_pin_hash';
 
 const DEFAULTS = {
   shopName: 'My Shop',
@@ -18,6 +13,7 @@ const DEFAULTS = {
   receiptFooter: 'Thank you for your patronage.',
   shopAddress: '',
   shopPhone: '',
+  autoLockMinutes: 5,
 };
 
 export async function getSettings(): Promise<Settings> {
@@ -32,8 +28,8 @@ export async function getSettings(): Promise<Settings> {
   await db.runAsync(
     `INSERT OR IGNORE INTO settings
        (id, shop_name, business_type, currency, owner_pin_hash, receipt_footer,
-        shop_address, shop_phone, created_at, updated_at, deleted_at, device_id)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?)`,
+        shop_address, shop_phone, auto_lock_minutes, created_at, updated_at, deleted_at, device_id)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?)`,
     SETTINGS_ID,
     DEFAULTS.shopName,
     DEFAULTS.businessType,
@@ -41,6 +37,7 @@ export async function getSettings(): Promise<Settings> {
     DEFAULTS.receiptFooter,
     DEFAULTS.shopAddress,
     DEFAULTS.shopPhone,
+    DEFAULTS.autoLockMinutes,
     meta.now,
     meta.now,
     meta.deviceId,
@@ -59,6 +56,7 @@ export type SettingsPatch = Partial<{
   shopPhone: string;
   currency: string;
   businessType: BusinessType;
+  autoLockMinutes: number;
   ownerPinHash: string | null;
 }>;
 
@@ -73,13 +71,14 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   const shopPhone = patch.shopPhone ?? current.shopPhone;
   const currency = patch.currency ?? current.currency;
   const businessType = patch.businessType ?? current.businessType;
+  const autoLockMinutes = patch.autoLockMinutes ?? current.autoLockMinutes;
   const ownerPinHash =
     patch.ownerPinHash !== undefined ? patch.ownerPinHash : current.ownerPinHash;
 
   await db.runAsync(
     `UPDATE settings
         SET shop_name = ?, receipt_footer = ?, shop_address = ?, shop_phone = ?, currency = ?, business_type = ?,
-            owner_pin_hash = ?, updated_at = ?
+            auto_lock_minutes = ?, owner_pin_hash = ?, updated_at = ?
       WHERE id = ?`,
     shopName,
     receiptFooter,
@@ -87,32 +86,11 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     shopPhone,
     currency,
     businessType,
+    autoLockMinutes,
     ownerPinHash,
     now,
     SETTINGS_ID,
   );
   bumpRevision();
   return getSettings();
-}
-
-/**
- * The PIN digest lives in SecureStore (hardware-backed on Android) and is
- * mirrored into `settings.owner_pin_hash` so the data model and JSON export
- * stay self-describing.
- */
-export async function setOwnerPin(pin: string | null): Promise<Settings> {
-  if (pin === null) {
-    await SecureStore.deleteItemAsync(PIN_SECURE_STORE_KEY);
-    return updateSettings({ ownerPinHash: null });
-  }
-  const hash = await hashPin(pin);
-  await SecureStore.setItemAsync(PIN_SECURE_STORE_KEY, hash);
-  return updateSettings({ ownerPinHash: hash });
-}
-
-export async function getStoredPinHash(): Promise<string | null> {
-  const fromSecureStore = await SecureStore.getItemAsync(PIN_SECURE_STORE_KEY);
-  if (fromSecureStore) return fromSecureStore;
-  const settings = await getSettings();
-  return settings.ownerPinHash;
 }

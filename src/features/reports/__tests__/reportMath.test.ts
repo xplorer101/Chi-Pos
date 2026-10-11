@@ -1,6 +1,5 @@
 import {
   DAY_MS,
-  canViewProfit,
   fillDailyBuckets,
   reconcileSales,
 } from '../reportMath';
@@ -51,11 +50,5 @@ describe('fillDailyBuckets', () => {
 
   it('returns a single day for a one-day range', () => {
     expect(fillDailyBuckets(DAY0, DAY0, [])).toEqual([{ day: DAY0, total: 0, count: 0 }]);
-  });
-});
-
-describe('canViewProfit', () => {
-  it('is visible until Step 4 introduces roles', () => {
-    expect(canViewProfit()).toBe(true);
   });
 });
