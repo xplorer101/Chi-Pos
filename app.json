@@ -2,7 +2,7 @@
   "expo": {
     "name": "ShopPOS",
     "slug": "shoppos",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/z.png",
     "scheme": "shoppos",
@@ -15,10 +15,12 @@
     },
     "android": {
       "package": "com.shoppos.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.VIBRATE"
+        "android.permission.VIBRATE",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
@@ -57,7 +59,8 @@
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "Unlock ShopPOS with Face ID."
+          "faceIDPermission": "Unlock ShopPOS with Face ID.",
+          "touchIDPermission": "Unlock ShopPOS with fingerprint."
         }
       ],
       "expo-sqlite",
