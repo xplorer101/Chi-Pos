@@ -10,7 +10,7 @@ import { ChipRow } from '@/components/ChipRow';
 import { Input, MoneyInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { SectionTitle } from '@/components/Section';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import {
@@ -345,7 +345,7 @@ function PaymentSheet({
   });
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Record payment"
@@ -441,6 +441,6 @@ function PaymentSheet({
 
         <Input label="Note (optional)" value={note} onChangeText={setNote} placeholder="e.g. part payment" />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }

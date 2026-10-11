@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { EmptyState } from '@/components/EmptyState';
 import { useLiveQuery } from '@/db/hooks';
@@ -63,7 +63,7 @@ export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: 
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={() => {
         reset();
@@ -210,6 +210,6 @@ export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: 
           )}
         </View>
       ) : null}
-    </Sheet>
+    </FormSheet>
   );
 }

@@ -10,7 +10,7 @@ import { Card } from '@/components/Card';
 import { EmptyState } from '@/components/EmptyState';
 import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import { getSaleWithDetails, voidSale } from '@/db/repositories/salesRepo';
@@ -358,7 +358,7 @@ function VoidSaleSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Void this sale?"
@@ -396,7 +396,7 @@ function VoidSaleSheet({
           multiline
         />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }
 

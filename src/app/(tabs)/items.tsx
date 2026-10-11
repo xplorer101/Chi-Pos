@@ -10,7 +10,7 @@ import { ChipRow } from '@/components/ChipRow';
 import { EmptyState } from '@/components/EmptyState';
 import { SearchInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { showToast } from '@/components/Toast';
 import { useLiveQuery } from '@/db/hooks';
@@ -255,7 +255,7 @@ export default function ItemsScreen() {
         onContinuousChange={setContinuous}
       />
 
-      <Sheet
+      <FormSheet
         visible={toAddOpen}
         onClose={() => setToAddOpen(false)}
         title="To add"
@@ -314,7 +314,7 @@ export default function ItemsScreen() {
             ))}
           </View>
         )}
-      </Sheet>
+      </FormSheet>
     </Screen>
   );
 }

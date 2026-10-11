@@ -10,7 +10,7 @@ import { ChipRow } from '@/components/ChipRow';
 import { Input, MoneyInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { SectionTitle } from '@/components/Section';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Stepper } from '@/components/Stepper';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
@@ -654,7 +654,7 @@ function RestockSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Restock"
@@ -734,7 +734,7 @@ function RestockSheet({
 
         <Input label="Note (optional)" value={note} onChangeText={setNote} placeholder="Delivery note, supplier…" />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }
 
@@ -792,7 +792,7 @@ function AdjustSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Stock adjustment"
@@ -861,6 +861,6 @@ function AdjustSheet({
           placeholder="e.g. Damaged packaging, stocktake count"
         />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }

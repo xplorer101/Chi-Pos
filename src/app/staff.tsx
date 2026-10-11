@@ -8,7 +8,7 @@ import { Card } from '@/components/Card';
 import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { SectionTitle } from '@/components/Section';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import {
@@ -186,7 +186,7 @@ function AddCashierSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Add cashier"
@@ -215,7 +215,7 @@ function AddCashierSheet({
           placeholder="4 to 6 digits"
         />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }
 
@@ -249,7 +249,7 @@ function RenameSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title={`Rename ${user.name}`}
@@ -266,7 +266,7 @@ function RenameSheet({
       }
     >
       <Input label="Name" value={name} onChangeText={setName} autoCapitalize="words" />
-    </Sheet>
+    </FormSheet>
   );
 }
 
@@ -304,7 +304,7 @@ function ResetPinSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title={`Reset ${user.name}'s PIN`}
@@ -330,6 +330,6 @@ function ResetPinSheet({
         maxLength={6}
         placeholder="4 to 6 digits"
       />
-    </Sheet>
+    </FormSheet>
   );
 }

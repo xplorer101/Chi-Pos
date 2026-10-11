@@ -7,7 +7,7 @@ import { Button } from '@/components/Button';
 import { ChipRow } from '@/components/ChipRow';
 import { MoneyInput } from '@/components/Input';
 import { KeyValueRow } from '@/components/Section';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { createSale, SaleError } from '@/db/repositories/salesRepo';
 import { useSessionStore } from '@/features/auth/sessionStore';
@@ -128,7 +128,7 @@ export function CheckoutSheet({ visible, onClose, onCompleted, onPickCustomer }:
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Checkout"
@@ -393,6 +393,6 @@ export function CheckoutSheet({ visible, onClose, onCompleted, onPickCustomer }:
           ))}
         </View>
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }

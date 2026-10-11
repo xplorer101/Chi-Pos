@@ -11,7 +11,7 @@ import { ChipRow } from '@/components/ChipRow';
 import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { Divider, KeyValueRow, SectionTitle } from '@/components/Section';
-import { Sheet } from '@/components/Sheet';
+import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import { writeBackupFile } from '@/db/export';
@@ -384,7 +384,7 @@ function AutoLockSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title="Auto-lock"
@@ -400,7 +400,7 @@ function AutoLockSheet({
           onChange={(value) => setMinutes(Number(value))}
         />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }
 
@@ -451,7 +451,7 @@ function ChangePinSheet({
   };
 
   return (
-    <Sheet
+    <FormSheet
       visible={visible}
       onClose={onClose}
       title={`Change ${actor.role === 'owner' ? 'owner' : ''} PIN`}
@@ -497,6 +497,6 @@ function ChangePinSheet({
           placeholder="••••"
         />
       </View>
-    </Sheet>
+    </FormSheet>
   );
 }
