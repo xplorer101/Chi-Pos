@@ -14,6 +14,7 @@ import {
   type SaleRow,
 } from '../mappers';
 import { newRowMeta } from '../meta';
+import { buildSalesScope } from '../salesScope';
 import { bumpRevision } from '../store';
 import { recordAudit } from './auditRepo';
 import type { ActingUser, PaymentMethod, Sale, SaleWithDetails } from '../types';
@@ -316,6 +317,8 @@ export async function listSales(
     limit?: number;
     /** Restrict to one user's sales. Omit for the actor's own sales. */
     userId?: string;
+    /** Include voided sales as well as completed ones (default false). */
+    includeVoided?: boolean;
   },
 ): Promise<SaleListItem[]> {
   if (options.userId != null && options.userId !== actor.id) {
@@ -325,23 +328,14 @@ export async function listSales(
   }
 
   const db = getDb();
-  const where: string[] = ['s.deleted_at IS NULL'];
-  const params: (number | string)[] = [];
-
-  if (options.start != null) {
-    where.push('s.sold_at >= ?');
-    params.push(options.start);
-  }
-  if (options.end != null) {
-    where.push('s.sold_at <= ?');
-    params.push(options.end);
-  }
   // No user requested: the owner sees everyone, a cashier sees only their own.
   const userId = options.userId ?? (can(actor, 'view_all_sales') ? null : actor.id);
-  if (userId != null) {
-    where.push('s.user_id = ?');
-    params.push(userId);
-  }
+  const scope = buildSalesScope({
+    start: options.start,
+    end: options.end,
+    userId,
+    includeVoided: options.includeVoided,
+  });
 
   const rows = await db.getAllAsync<
     SaleRow & {
@@ -356,10 +350,10 @@ export async function listSales(
        FROM sales s
        LEFT JOIN customers c ON c.id = s.customer_id
        LEFT JOIN users u ON u.id = s.user_id
-      WHERE ${where.join(' AND ')}
+      WHERE ${scope.sql}
       ORDER BY s.sold_at DESC
       LIMIT ?`,
-    ...params,
+    ...scope.params,
     options.limit ?? 100,
   );
 

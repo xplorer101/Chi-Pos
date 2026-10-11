@@ -34,13 +34,16 @@ export default function MySalesScreen() {
         end: scope === 'today' ? today.end : undefined,
         limit: 200,
         userId: actor.id,
+        includeVoided: true,
       }),
     [scope, today.start, today.end],
   );
 
   const todayTotal = useMemo(() => {
     if (scope !== 'today') return 0;
-    return (sales ?? []).reduce((sum, sale) => sum + sale.total, 0);
+    return (sales ?? [])
+      .filter((sale) => sale.status !== 'voided')
+      .reduce((sum, sale) => sum + sale.total, 0);
   }, [sales, scope]);
 
   return (

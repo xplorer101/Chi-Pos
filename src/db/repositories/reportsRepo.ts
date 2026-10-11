@@ -1,5 +1,6 @@
 import { getDb } from '../index';
 import { mapItemWithStock, type ItemRow } from '../mappers';
+import { buildSalesScope, getSalesPeriodTotals } from '../salesScope';
 import { DAY_MS, fillDailyBuckets, reconcileSales, type DailyBucket, type Reconciliation } from '@/features/reports/reportMath';
 import { assertPermission } from '@/features/auth/permissions';
 import type { ActingUser, ItemWithStock, PaymentMethod } from '../types';
@@ -73,68 +74,63 @@ export async function getReport(
   assertPermission(actor, 'view_reports');
   const db = getDb();
 
-  const parts: string[] = [`s.status = 'completed'`, `s.sold_at >= ?`, `s.sold_at <= ?`];
-  const params: (number | string)[] = [start, end];
-  if (options.userId != null && options.userId !== actor.id) {
-    assertPermission(actor, 'view_all_sales');
-    parts.push('s.user_id = ?');
-    params.push(options.userId);
+  // A single seller filter is honoured whenever one is requested; only
+  // filtering to somebody else needs the wider permission.
+  let userId: string | null = null;
+  if (options.userId != null) {
+    if (options.userId !== actor.id) assertPermission(actor, 'view_all_sales');
+    userId = options.userId;
   }
-  const saleScope = parts.join(' AND ');
+  const scope = buildSalesScope({ start, end, userId });
 
-  const totals = await db.getFirstAsync<{ total_sales: number; sales_count: number }>(
-    `SELECT COUNT(*) AS sales_count, COALESCE(SUM(total), 0) AS total_sales
-       FROM sales
-      WHERE deleted_at IS NULL AND ${saleScope}`,
-    ...params,
-  );
+  const totals = await getSalesPeriodTotals(db, { start, end, userId });
 
   const units = await db.getFirstAsync<{ items_sold: number }>(
     `SELECT COALESCE(SUM(sl.quantity), 0) AS items_sold
        FROM sale_lines sl
        JOIN sales s ON s.id = sl.sale_id
-      WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
-        AND ${saleScope}`,
-    ...params,
+      WHERE sl.deleted_at IS NULL
+        AND ${scope.sql}`,
+    ...scope.params,
   );
 
   const methodRows = await db.getAllAsync<{ method: PaymentMethod; amount: number }>(
     `SELECT p.method AS method, COALESCE(SUM(p.amount), 0) AS amount
        FROM payments p
        JOIN sales s ON s.id = p.sale_id
-      WHERE p.deleted_at IS NULL AND s.deleted_at IS NULL
-        AND ${saleScope}
+      WHERE p.deleted_at IS NULL
+        AND ${scope.sql}
       GROUP BY p.method
       ORDER BY amount DESC`,
-    ...params,
+    ...scope.params,
   );
 
   const cost = await db.getFirstAsync<{ cogs: number }>(
     `SELECT COALESCE(SUM(sl.unit_cost * sl.quantity_base), 0) AS cogs
        FROM sale_lines sl
        JOIN sales s ON s.id = sl.sale_id
-      WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
-        AND ${saleScope}`,
-    ...params,
+      WHERE sl.deleted_at IS NULL
+        AND ${scope.sql}`,
+    ...scope.params,
   );
 
   const profit = await db.getFirstAsync<{ profit: number }>(
     `SELECT COALESCE(SUM(sl.line_total - sl.unit_cost * sl.quantity_base), 0) AS profit
        FROM sale_lines sl
        JOIN sales s ON s.id = sl.sale_id
-      WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
-        AND ${saleScope}`,
-    ...params,
+      WHERE sl.deleted_at IS NULL
+        AND ${scope.sql}`,
+    ...scope.params,
   );
 
   const estimated = await db.getFirstAsync<{ c: number }>(
     `SELECT COUNT(*) AS c
        FROM sale_lines sl
        JOIN sales s ON s.id = sl.sale_id
-      WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
+      WHERE sl.deleted_at IS NULL
         AND sl.cost_estimated = 1
-        AND ${saleScope}`,
-    ...params,
+        AND ${scope.sql}`,
+    ...scope.params,
   );
 
   // Money put toward debts taken before this range. Keyed on the payment's own
@@ -163,12 +159,12 @@ export async function getReport(
        FROM sale_lines sl
        JOIN sales s ON s.id = sl.sale_id
        LEFT JOIN items i ON i.id = sl.item_id
-      WHERE sl.deleted_at IS NULL AND s.deleted_at IS NULL
-        AND ${saleScope}
+      WHERE sl.deleted_at IS NULL
+        AND ${scope.sql}
       GROUP BY sl.item_id
       ORDER BY quantity_base DESC, revenue DESC
       LIMIT 10`,
-    ...params,
+    ...scope.params,
   );
 
   // Group sales into local days. The offset converts the stored UTC epoch to
@@ -179,11 +175,11 @@ export async function getReport(
             COUNT(*) AS day_count,
             COALESCE(SUM(s.total), 0) AS total
        FROM sales s
-      WHERE s.deleted_at IS NULL AND ${saleScope}
+      WHERE ${scope.sql}
       GROUP BY day_index
       ORDER BY day_index ASC`,
     offsetMs,
-    ...params,
+    ...scope.params,
   );
 
   const amountOf = (method: PaymentMethod) =>
@@ -197,7 +193,7 @@ export async function getReport(
   };
   collected.total = collected.cash + collected.transfer + collected.pos;
   const creditGiven = amountOf('credit');
-  const totalSales = totals?.total_sales ?? 0;
+  const totalSales = totals.total;
 
   const lowStock = await getLowStockItems(actor);
   const outstandingDebt = await getOutstandingDebt();
@@ -216,7 +212,7 @@ export async function getReport(
     start,
     end,
     totalSales,
-    salesCount: totals?.sales_count ?? 0,
+    salesCount: totals.count,
     itemsSoldCount: units?.items_sold ?? 0,
     byMethod: methodRows.filter((row) => row.amount > 0),
     collected,
@@ -294,16 +290,11 @@ export async function getEndOfDaySummary(
   const db = getDb();
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
-  const end = start.getTime() + 24 * 60 * 60 * 1000 - 1;
+  const startMs = start.getTime();
+  const end = startMs + DAY_MS - 1;
 
-  const sales = await db.getFirstAsync<{ sales_count: number; sales_total: number }>(
-    `SELECT COUNT(*) AS sales_count, COALESCE(SUM(total), 0) AS sales_total
-       FROM sales
-      WHERE deleted_at IS NULL AND status = 'completed'
-        AND sold_at >= ? AND sold_at <= ?`,
-    start.getTime(),
-    end,
-  );
+  // Same shared scope as the reports summary, so the two cards always agree.
+  const sales = await getSalesPeriodTotals(db, { start: startMs, end });
 
   const payments = await db.getFirstAsync<{
     cash_sales: number;
@@ -318,7 +309,7 @@ export async function getEndOfDaySummary(
         COALESCE(SUM(CASE WHEN method = 'credit' THEN amount ELSE 0 END), 0) AS credit
        FROM payments
       WHERE deleted_at IS NULL AND paid_at >= ? AND paid_at <= ?`,
-    start.getTime(),
+    startMs,
     end,
   );
 
@@ -326,10 +317,10 @@ export async function getEndOfDaySummary(
   const cashFromDebtPayments = payments?.cash_debt ?? 0;
 
   return {
-    start: start.getTime(),
+    start: startMs,
     end,
-    salesCount: sales?.sales_count ?? 0,
-    salesTotal: sales?.sales_total ?? 0,
+    salesCount: sales.count,
+    salesTotal: sales.total,
     cashFromSales,
     cashFromDebtPayments,
     expectedCash: cashFromSales + cashFromDebtPayments,
