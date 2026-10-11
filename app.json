@@ -20,7 +20,10 @@
         "android.permission.CAMERA",
         "android.permission.VIBRATE",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
       ],
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
@@ -28,7 +31,7 @@
         "foregroundImage": "./assets/z.png",
         "monochromeImage": "./assets/z.png"
       },
-      "softwareKeyboardLayoutMode": "pan"
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "favicon": "./assets/z.png",
@@ -68,6 +71,12 @@
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3e01fa98-2f79-423e-979a-c9fbd947dbf0"
+      }
     }
   }
 }
