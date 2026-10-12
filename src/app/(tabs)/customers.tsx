@@ -8,6 +8,7 @@ import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { ChipRow } from '@/components/ChipRow';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { SearchInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { Text } from '@/components/Text';
@@ -34,11 +35,12 @@ export default function CustomersScreen() {
     if (viewParam === 'owing') setView('owing');
   }, [viewParam]);
 
-  const { data: customers, isLoading } = useLiveQuery(
+  const { data: customers, isLoading, error: customersError, refresh: refreshCustomers } = useLiveQuery(
     () => listCustomers({ search, owingOnly: debtorsOnly }),
     [search, debtorsOnly],
+    'customers-list',
   );
-  const { data: totalOutstanding } = useLiveQuery(() => getOutstandingDebt(), []);
+  const { data: totalOutstanding } = useLiveQuery(() => getOutstandingDebt(), [], 'customers-list');
 
   const list = customers ?? [];
   const owedTotal = list.reduce((sum, customer) => sum + customer.owed, 0);
@@ -90,7 +92,9 @@ export default function CustomersScreen() {
         </Card>
       ) : null}
 
-      {isLoading ? null : list.length === 0 ? (
+      {customersError ? (
+        <QueryErrorState onRetry={refreshCustomers} />
+      ) : isLoading ? null : list.length === 0 ? (
         <EmptyState
           icon="people-outline"
           title={

@@ -7,6 +7,7 @@ import { Input } from '@/components/Input';
 import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { useLiveQuery } from '@/db/hooks';
 import { createCustomer, listCustomers } from '@/db/repositories/customersRepo';
 import { useSessionStore } from '@/features/auth/sessionStore';
@@ -31,9 +32,10 @@ export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: customers } = useLiveQuery(
+  const { data: customers, error: customersError, refresh: refreshCustomers } = useLiveQuery(
     () => listCustomers({ search }),
     [search, visible ? 'open' : 'closed'],
+    'customer-picker',
   );
 
   const reset = () => {
@@ -144,7 +146,9 @@ export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: 
             ) : null}
           </Pressable>
 
-          {customers && customers.length === 0 && !search ? (
+          {customersError ? (
+            <QueryErrorState onRetry={refreshCustomers} />
+          ) : customers && customers.length === 0 && !search ? (
             <EmptyState
               icon="people-outline"
               title="No customers yet"

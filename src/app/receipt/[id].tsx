@@ -8,6 +8,7 @@ import { captureRef } from 'react-native-view-shot';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { FormSheet } from '@/components/FormSheet';
@@ -43,8 +44,8 @@ function ReceiptInner({ actor, saleId }: { actor: ActingUser; saleId: string }) 
   const [voidOpen, setVoidOpen] = useState(false);
   const paperRef = useRef<View>(null);
 
-  const { data: sale, isLoading } = useLiveQuery(() => getSaleWithDetails(saleId), [saleId]);
-  const { data: settings } = useLiveQuery(() => getSettings(), []);
+  const { data: sale, isLoading, error: saleError, refresh: refreshSale } = useLiveQuery(() => getSaleWithDetails(saleId), [saleId], 'receipt');
+  const { data: settings } = useLiveQuery(() => getSettings(), [], 'receipt');
 
   const paymentLabel = useMemo(() => {
     if (!sale || sale.payments.length === 0) return '';
@@ -132,7 +133,9 @@ function ReceiptInner({ actor, saleId }: { actor: ActingUser; saleId: string }) 
   if (!sale) {
     return (
       <Screen title="Receipt" onBack={() => router.back()}>
-        {isLoading ? null : (
+        {saleError ? (
+          <QueryErrorState onRetry={refreshSale} />
+        ) : isLoading ? null : (
           <EmptyState
             icon="receipt-outline"
             title="Receipt not found"

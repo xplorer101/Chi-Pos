@@ -8,6 +8,7 @@ import { BarcodeScanner } from '@/components/BarcodeScanner';
 import { Button } from '@/components/Button';
 import { ChipRow } from '@/components/ChipRow';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { SearchInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
 import { FormSheet } from '@/components/FormSheet';
@@ -35,10 +36,11 @@ export default function ItemsScreen() {
   const removeFromAdd = useToAddStore((state) => state.remove);
   const clearToAdd = useToAddStore((state) => state.clear);
 
-  const { data: categories } = useLiveQuery(() => getCategories(), []);
-  const { data: items, isLoading } = useLiveQuery(
+  const { data: categories } = useLiveQuery(() => getCategories(), [], 'items-list');
+  const { data: items, isLoading, error: itemsError, refresh: refreshItems } = useLiveQuery(
     () => listItems({ search, category: category === 'all' ? '' : category }),
     [search, category],
+    'items-list',
   );
 
   const categoryOptions = useMemo(
@@ -156,7 +158,9 @@ export default function ItemsScreen() {
         />
       ) : null}
 
-      {isLoading ? null : list.length === 0 ? (
+      {itemsError ? (
+        <QueryErrorState onRetry={refreshItems} />
+      ) : isLoading ? null : list.length === 0 ? (
         <EmptyState
           icon="cube-outline"
           title={search || category !== 'all' ? 'No items match' : 'No items yet'}

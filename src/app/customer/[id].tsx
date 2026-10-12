@@ -9,6 +9,7 @@ import { Button } from '@/components/Button';
 import { ChipRow } from '@/components/ChipRow';
 import { Input, MoneyInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { SectionTitle } from '@/components/Section';
 import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
@@ -53,14 +54,8 @@ function CustomerScreenInner() {
   const [notes, setNotes] = useState('');
   const [paymentOpen, setPaymentOpen] = useState(false);
 
-  const { data: customer } = useLiveQuery(
-    async () => (isNew ? null : getCustomer(customerId)),
-    [customerId, isNew],
-  );
-  const { data: history } = useLiveQuery(
-    async () => (isNew ? [] : getCustomerHistory(customerId)),
-    [customerId, isNew],
-  );
+  const { data: customer, error: customerError, refresh: refreshCustomer } = useLiveQuery(async () => (isNew ? null : getCustomer(customerId)), [customerId, isNew], 'customer');
+  const { data: history, error: historyError, refresh: refreshHistory } = useLiveQuery(async () => (isNew ? [] : getCustomerHistory(customerId)), [customerId, isNew], 'customer');
 
   useEffect(() => {
     if (!customer) return;
@@ -120,6 +115,14 @@ function CustomerScreenInner() {
       ],
     );
   };
+
+  if (customerError) {
+    return (
+      <Screen title={isNew ? 'New customer' : 'Customer'} onBack={() => router.back()}>
+        <QueryErrorState onRetry={refreshCustomer} />
+      </Screen>
+    );
+  }
 
   if (loading) {
     return (
@@ -199,7 +202,9 @@ function CustomerScreenInner() {
       {!isNew ? (
         <View style={{ gap: theme.space(3) }}>
           <SectionTitle>Activity</SectionTitle>
-          {!history || history.length === 0 ? (
+          {historyError ? (
+            <QueryErrorState onRetry={refreshHistory} />
+          ) : !history || history.length === 0 ? (
             <Text variant="body" tone="muted">
               No sales or payments recorded for {name} yet.
             </Text>

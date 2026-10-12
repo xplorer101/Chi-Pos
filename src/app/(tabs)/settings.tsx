@@ -10,6 +10,7 @@ import { Card } from '@/components/Card';
 import { ChipRow } from '@/components/ChipRow';
 import { Input } from '@/components/Input';
 import { Screen } from '@/components/Screen';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Divider, KeyValueRow, SectionTitle } from '@/components/Section';
 import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
@@ -44,7 +45,7 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
 
   const isOwner = actor.role === 'owner';
 
-  const { data: settings } = useLiveQuery(() => getSettings(), []);
+  const { data: settings, error: settingsError, refresh: refreshSettings } = useLiveQuery(() => getSettings(), [], 'settings');
 
   const [shopName, setShopName] = useState('');
   const [receiptFooter, setReceiptFooter] = useState('');
@@ -158,6 +159,14 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
       },
     ]);
   };
+
+  if (settingsError) {
+    return (
+      <Screen title="Settings" subtitle={settings?.shopName}>
+        <QueryErrorState onRetry={refreshSettings} />
+      </Screen>
+    );
+  }
 
   return (
     <Screen title="Settings" subtitle={settings?.shopName}>

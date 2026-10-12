@@ -6,6 +6,7 @@ import { Badge } from '@/components/Badge';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { Input } from '@/components/Input';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Screen } from '@/components/Screen';
 import { SectionTitle } from '@/components/Section';
 import { FormSheet } from '@/components/FormSheet';
@@ -39,7 +40,7 @@ function StaffInner() {
   const router = useRouter();
   const actor = useSessionStore((state) => state.currentUser) as ActingUser;
 
-  const { data: users } = useLiveQuery(() => listAllUsers(), []);
+  const { data: users, error: usersError, refresh: refreshUsers } = useLiveQuery(() => listAllUsers(), [], 'staff');
   const [addOpen, setAddOpen] = useState(false);
   const [target, setTarget] = useState<User | null>(null);
   const [action, setAction] = useState<'rename' | 'reset' >('rename');
@@ -85,43 +86,47 @@ function StaffInner() {
         </SectionTitle>
 
         <Card padded={false}>
-          {(users ?? []).map((user, index) => (
-            <View
-              key={user.id}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: theme.space(3),
-                paddingHorizontal: theme.space(4),
-                paddingVertical: theme.space(3),
-                borderTopWidth: index === 0 ? 0 : 1,
-                borderTopColor: theme.colors.border,
-              }}
-            >
-              <View style={{ flex: 1 }}>
-                <Text variant="bodyMedium">{user.name}</Text>
-                <Text variant="caption" tone="muted">
-                  {roleLabel(user.role)} · {user.isActive ? 'Active' : 'Deactivated'}
-                </Text>
-              </View>
-              {user.role === 'owner' ? (
-                <Badge label="Owner" tone="accent" />
-              ) : (
-                <View style={{ flexDirection: 'row', gap: theme.space(1) }}>
-                  <Button label="Rename" variant="outline" size="sm" onPress={() => openRename(user)} fullWidth={false} />
-                  <Button label="PIN" variant="outline" size="sm" icon="key-outline" onPress={() => openReset(user)} fullWidth={false} />
-                  <Button
-                    label={user.isActive ? 'Deactivate' : 'Activate'}
-                    variant="outline"
-                    size="sm"
-                    onPress={() => void setUserActive(actor, user.id, !user.isActive)}
-                    fullWidth={false}
-                  />
-                  <Button label="Delete" variant="danger" size="sm" onPress={() => confirmDelete(user)} fullWidth={false} />
+          {usersError ? (
+            <QueryErrorState onRetry={refreshUsers} />
+          ) : (
+            (users ?? []).map((user, index) => (
+              <View
+                key={user.id}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: theme.space(3),
+                  paddingHorizontal: theme.space(4),
+                  paddingVertical: theme.space(3),
+                  borderTopWidth: index === 0 ? 0 : 1,
+                  borderTopColor: theme.colors.border,
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text variant="bodyMedium">{user.name}</Text>
+                  <Text variant="caption" tone="muted">
+                    {roleLabel(user.role)} · {user.isActive ? 'Active' : 'Deactivated'}
+                  </Text>
                 </View>
-              )}
-            </View>
-          ))}
+                {user.role === 'owner' ? (
+                  <Badge label="Owner" tone="accent" />
+                ) : (
+                  <View style={{ flexDirection: 'row', gap: theme.space(1) }}>
+                    <Button label="Rename" variant="outline" size="sm" onPress={() => openRename(user)} fullWidth={false} />
+                    <Button label="PIN" variant="outline" size="sm" icon="key-outline" onPress={() => openReset(user)} fullWidth={false} />
+                    <Button
+                      label={user.isActive ? 'Deactivate' : 'Activate'}
+                      variant="outline"
+                      size="sm"
+                      onPress={() => void setUserActive(actor, user.id, !user.isActive)}
+                      fullWidth={false}
+                    />
+                    <Button label="Delete" variant="danger" size="sm" onPress={() => confirmDelete(user)} fullWidth={false} />
+                  </View>
+                )}
+              </View>
+            ))
+          )}
         </Card>
 
         <Text variant="caption" tone="muted">

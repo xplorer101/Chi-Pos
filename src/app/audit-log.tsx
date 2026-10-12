@@ -4,6 +4,7 @@ import { Redirect, useRouter } from 'expo-router';
 
 import { Card } from '@/components/Card';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Screen } from '@/components/Screen';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
@@ -41,11 +42,13 @@ function AuditLogInner() {
   const theme = useTheme();
   const router = useRouter();
 
-  const { data: entries } = useLiveQuery(() => listAuditEntries({ limit: 200 }), []);
+  const { data: entries, error: entriesError, refresh: refreshEntries } = useLiveQuery(() => listAuditEntries({ limit: 200 }), [], 'audit-log');
 
   return (
     <Screen title="Audit log" subtitle="Read-only record of privileged actions" onBack={() => router.back()}>
-      {entries && entries.length === 0 ? (
+      {entriesError ? (
+        <QueryErrorState onRetry={refreshEntries} />
+      ) : entries && entries.length === 0 ? (
         <EmptyState
           icon="document-text-outline"
           title="Nothing logged yet"

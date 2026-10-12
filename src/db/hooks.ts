@@ -14,7 +14,11 @@ type LiveQueryResult<T> = {
  * Runs an async query and re-runs it whenever a repository bumps the DB
  * revision. Keeps the previous value while reloading so lists do not flash.
  */
-export function useLiveQuery<T>(loader: () => Promise<T>, deps: DependencyList = []): LiveQueryResult<T> {
+export function useLiveQuery<T>(
+  loader: () => Promise<T>,
+  deps: DependencyList = [],
+  name?: string,
+): LiveQueryResult<T> {
   const revision = useDbStore((state) => state.revision);
   const [data, setData] = useState<T | undefined>(undefined);
   const [error, setError] = useState<Error | null>(null);
@@ -35,7 +39,10 @@ export function useLiveQuery<T>(loader: () => Promise<T>, deps: DependencyList =
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
-        setError(caught instanceof Error ? caught : new Error(String(caught)));
+        const err = caught instanceof Error ? caught : new Error(String(caught));
+        // eslint-disable-next-line no-console
+        console.error(`[useLiveQuery${name ? `(${name})` : ''}]`, err.message, err);
+        setError(err);
         setHasLoaded(true);
       });
     return () => {

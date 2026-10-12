@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Badge } from '@/components/Badge';
 import { Button } from '@/components/Button';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { BarcodeScanner } from '@/components/BarcodeScanner';
 import { SearchInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
@@ -45,12 +46,13 @@ export default function SellScreen() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
 
-  const { data: items } = useLiveQuery(() => listItems(), []);
+  const { data: items, error: itemsError, refresh: refreshItems } = useLiveQuery(() => listItems({}), [], 'sell-home');
   const { data: unitsMap } = useLiveQuery(
     () => getUnitsForItems((items ?? []).map((item) => item.id)),
     [items],
+    'sell-home'
   );
-  const { data: settings } = useLiveQuery(() => getSettings(), []);
+  const { data: settings } = useLiveQuery(() => getSettings(), [], 'sell-home');
 
   const totals = useMemo(() => cartTotals(lines as TotalsLine[], discount), [lines, discount]);
 
@@ -191,7 +193,9 @@ export default function SellScreen() {
       {trimmedQuery ? (
         <View style={{ gap: theme.space(2) }}>
           <SectionTitle>{results.length} result{results.length === 1 ? '' : 's'}</SectionTitle>
-          {results.length === 0 ? (
+          {itemsError ? (
+            <QueryErrorState onRetry={refreshItems} />
+          ) : results.length === 0 ? (
             <EmptyState
               icon="search-outline"
               title="No items found"

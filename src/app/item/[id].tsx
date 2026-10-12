@@ -9,6 +9,7 @@ import { Button } from '@/components/Button';
 import { ChipRow } from '@/components/ChipRow';
 import { Input, MoneyInput } from '@/components/Input';
 import { Screen } from '@/components/Screen';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { SectionTitle } from '@/components/Section';
 import { FormSheet } from '@/components/FormSheet';
 import { Stepper } from '@/components/Stepper';
@@ -77,18 +78,9 @@ function ItemScreenInner() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerUnit, setScannerUnit] = useState<number | null>(null);
 
-  const { data: existing } = useLiveQuery(
-    async () => (isNew ? null : getItem(itemId)),
-    [itemId, isNew],
-  );
-  const { data: existingUnits } = useLiveQuery(
-    async () => (isNew ? [] : getItemUnits(itemId)),
-    [itemId, isNew],
-  );
-  const { data: movements } = useLiveQuery(
-    async () => (isNew ? [] : listMovements(itemId, 30)),
-    [itemId, isNew],
-  );
+  const { data: existing, error: itemError, refresh: refreshItem } = useLiveQuery(async () => (isNew ? null : getItem(itemId)), [itemId, isNew], 'item');
+  const { data: existingUnits } = useLiveQuery(async () => (isNew ? [] : getItemUnits(itemId)), [itemId, isNew], 'item');
+  const { data: movements } = useLiveQuery(async () => (isNew ? [] : listMovements(itemId, 30)), [itemId, isNew], 'item');
 
   useEffect(() => {
     if (isNew && barcodeParam) {
@@ -217,6 +209,14 @@ function ItemScreenInner() {
   const stock = existing?.stock ?? 0;
 
   const historyEntries = useMemo(() => movements ?? [], [movements]);
+
+  if (itemError) {
+    return (
+      <Screen title={isNew ? 'New item' : 'Item'} onBack={() => router.back()}>
+        <QueryErrorState onRetry={refreshItem} />
+      </Screen>
+    );
+  }
 
   if (loading) {
     return (

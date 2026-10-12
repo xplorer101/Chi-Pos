@@ -8,6 +8,7 @@ import { Badge } from '@/components/Badge';
 import { Card } from '@/components/Card';
 import { ChipRow } from '@/components/ChipRow';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Screen } from '@/components/Screen';
 import { Divider, KeyValueRow, SectionTitle } from '@/components/Section';
 import { Text } from '@/components/Text';
@@ -74,7 +75,7 @@ function ReportsInner() {
       ...users.map((user) => ({ value: user.id, label: user.name })),
     ],
     [users],
-  );
+);
 
   const range = useMemo(() => {
     switch (period) {
@@ -92,18 +93,16 @@ function ReportsInner() {
     }
   }, [period, customFrom, customTo]);
 
-  const { data: report, isLoading } = useLiveQuery(
-    () => getReport(actor, range.start, range.end, { userId: staffId ?? undefined }),
-    [range.start, range.end, staffId],
-  );
-  const { data: eod } = useLiveQuery(
-    () => getEndOfDaySummary(actor),
-    [period, staffId],
-  );
-  const { data: sales } = useLiveQuery(
-    () => listSales(actor, { start: range.start, end: range.end, limit: 15 }),
-    [range.start, range.end],
-  );
+  const { data: report, isLoading, error: reportError, refresh: refreshReport } = useLiveQuery(() => getReport(actor, range.start, range.end, { userId: staffId ?? undefined }), [range.start, range.end, staffId], 'reports');
+  const { data: eod, error: eodError, refresh: refreshEod } = useLiveQuery(() => getEndOfDaySummary(actor), [period, staffId], 'reports');
+  const { data: sales, error: salesError, refresh: refreshSales } = useLiveQuery(() => listSales(actor, { start: range.start, end: range.end, limit: 15 }), [range.start, range.end], 'reports');
+
+  const queryError = reportError ?? eodError ?? salesError;
+  const retryQueries = () => {
+    refreshReport();
+    refreshEod();
+    refreshSales();
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -212,7 +211,9 @@ function ReportsInner() {
         ) : null}
       </Card>
 
-      {!isLoading && (report?.salesCount ?? 0) === 0 ? (
+      {queryError ? (
+        <QueryErrorState onRetry={retryQueries} />
+      ) : !isLoading && (report?.salesCount ?? 0) === 0 ? (
         <EmptyState
           icon="bar-chart-outline"
           title="Nothing here yet"
@@ -466,7 +467,7 @@ function ReportsInner() {
         </View>
       ) : null}
     </Screen>
-  );
+);
 }
 
 function RangeField({
@@ -518,5 +519,5 @@ function RangeField({
         />
       ) : null}
     </View>
-  );
+);
 }

@@ -6,6 +6,7 @@ import { Badge } from '@/components/Badge';
 import { Card } from '@/components/Card';
 import { ChipRow } from '@/components/ChipRow';
 import { EmptyState } from '@/components/EmptyState';
+import { QueryErrorState } from '@/components/QueryErrorState';
 import { Screen } from '@/components/Screen';
 import { SectionTitle } from '@/components/Section';
 import { Text } from '@/components/Text';
@@ -27,8 +28,7 @@ export default function MySalesScreen() {
 
   const today = useMemo(() => periodRange('today'), []);
 
-  const { data: sales } = useLiveQuery(
-    () =>
+  const { data: sales, error: salesError, refresh: refreshSales } = useLiveQuery(() =>
       listSales(actor, {
         start: scope === 'today' ? today.start : undefined,
         end: scope === 'today' ? today.end : undefined,
@@ -37,6 +37,7 @@ export default function MySalesScreen() {
         includeVoided: true,
       }),
     [scope, today.start, today.end],
+    'my-sales',
   );
 
   const todayTotal = useMemo(() => {
@@ -75,7 +76,9 @@ export default function MySalesScreen() {
 
       <View style={{ gap: theme.space(2) }}>
         <SectionTitle>My receipts</SectionTitle>
-        {sales && sales.length === 0 ? (
+        {salesError ? (
+          <QueryErrorState onRetry={refreshSales} />
+        ) : sales && sales.length === 0 ? (
           <EmptyState
             icon="receipt-outline"
             title="No sales yet"
