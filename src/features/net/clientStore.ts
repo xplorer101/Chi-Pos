@@ -1,9 +1,15 @@
 import { create } from 'zustand';
 
+import {
+  getCatalogSyncedAt,
+  setCatalogSyncedAt,
+  writeCatalog,
+} from '@/db/repositories/catalogRepo';
+import type { CatalogSnapshot } from '@/db/types';
 import { getDeviceId } from '@/lib/device';
 
 import { clearPairing, getPairing, savePairing, type Pairing } from './pairing';
-import { PAIR_HEADER, PROTOCOL_VERSION } from './protocol';
+import { CATALOG_PATH, PAIR_HEADER, PROTOCOL_VERSION } from './protocol';
 import { httpRequest } from './tcp';
 
 export type ClientStatus = 'unpaired' | 'connecting' | 'pending' | 'connected' | 'offline';
@@ -14,12 +20,16 @@ type ClientState = {
   shopName: string | null;
   error: string | null;
   lastSeenAt: number | null;
+  catalogSyncedAt: number | null;
+  syncing: boolean;
+  syncError: string | null;
   claim: { host: string; port: number; clientId: string; secret: string; shopId: string } | null;
 
   load: () => Promise<void>;
   pair: (input: { host: string; port: number; key: string; shopId?: string }) => Promise<void>;
   pollPairStatus: () => Promise<void>;
   ping: () => Promise<boolean>;
+  syncCatalog: () => Promise<void>;
   disconnect: () => Promise<void>;
 };
 
@@ -38,17 +48,22 @@ export const useClientStore = create<ClientState>((set, get) => ({
   shopName: null,
   error: null,
   lastSeenAt: null,
+  catalogSyncedAt: null,
+  syncing: false,
+  syncError: null,
   claim: null,
 
   load: async () => {
     const pairing = await getPairing();
+    const catalogSyncedAt = await getCatalogSyncedAt();
     if (!pairing) {
-      set({ status: 'unpaired', pairing: null });
+      set({ status: 'unpaired', pairing: null, catalogSyncedAt });
       return;
     }
-    set({ pairing, status: 'connecting' });
+    set({ pairing, status: 'connecting', catalogSyncedAt });
     const ok = await get().ping();
     set({ status: ok ? 'connected' : 'offline' });
+    if (ok) await get().syncCatalog();
   },
 
   pair: async ({ host, port, key, shopId = '' }) => {
@@ -118,12 +133,51 @@ export const useClientStore = create<ClientState>((set, get) => ({
         };
         await savePairing(pairing);
         set({ pairing, claim: null, status: 'connected', shopName: body.shopName ?? get().shopName, error: null });
+        await get().syncCatalog();
       } else if (body?.status === 'revoked') {
         stopPolling();
         set({ status: 'unpaired', claim: null, error: 'This device was removed by the admin.' });
       }
     } catch {
       // Keep polling; the admin may still be approving.
+    }
+  },
+
+  syncCatalog: async () => {
+    const pairing = get().pairing;
+    if (!pairing) return;
+    set({ syncing: true, syncError: null });
+    try {
+      const since = await getCatalogSyncedAt();
+      const response = await httpRequest({
+        host: pairing.host,
+        port: pairing.port,
+        path: `${CATALOG_PATH}?since=${since}`,
+        token: pairing.token,
+        timeoutMs: 12000,
+      });
+      if (response.status === 401) {
+        set({ syncing: false, syncError: 'This phone is no longer approved by the admin.' });
+        return;
+      }
+      if (response.status !== 200 || !response.body) {
+        throw new Error('Could not load the catalog.');
+      }
+      const snapshot = response.body as CatalogSnapshot;
+      await writeCatalog(snapshot);
+      await setCatalogSyncedAt(snapshot.serverTime);
+      set({
+        syncing: false,
+        catalogSyncedAt: snapshot.serverTime,
+        lastSeenAt: Date.now(),
+        status: 'connected',
+      });
+    } catch (error) {
+      set({
+        syncing: false,
+        syncError: error instanceof Error ? error.message : String(error),
+        status: get().pairing ? 'offline' : 'unpaired',
+      });
     }
   },
 
@@ -148,6 +202,15 @@ export const useClientStore = create<ClientState>((set, get) => ({
   disconnect: async () => {
     stopPolling();
     await clearPairing();
-    set({ pairing: null, claim: null, status: 'unpaired', shopName: null, error: null });
+    set({
+      pairing: null,
+      claim: null,
+      status: 'unpaired',
+      shopName: null,
+      error: null,
+      syncing: false,
+      syncError: null,
+      lastSeenAt: null,
+    });
   },
 }));

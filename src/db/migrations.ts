@@ -371,6 +371,17 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_outbox_status ON outbox(status, created_at);
     `,
   },
+  {
+    version: 9,
+    name: 'stock_snapshot',
+    sql: `
+      CREATE TABLE stock_snapshot (
+        item_id TEXT PRIMARY KEY NOT NULL,
+        quantity_base INTEGER NOT NULL DEFAULT 0,
+        synced_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

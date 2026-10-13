@@ -59,3 +59,8 @@ export type HealthResponse = {
 
 export const PAIR_HEADER = 'x-pairing-key';
 export const TOKEN_HEADER = 'x-device-token';
+
+export const HEALTH_PATH = '/health';
+export const PAIR_REQUEST_PATH = '/pair/request';
+export const PAIR_STATUS_PATH = '/pair/status';
+export const CATALOG_PATH = '/catalog';

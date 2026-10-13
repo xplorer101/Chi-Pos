@@ -129,6 +129,48 @@ export interface ItemUnit extends BaseEntity {
   barcode: string | null;
 }
 
+/**
+ * Wire shapes for the read-only catalog a cashier pulls from the admin host.
+ * Timestamps are epoch ms; `deletedAt` is set for soft-deleted rows so the
+ * cashier can mirror deletions.
+ */
+export type CatalogItem = {
+  id: string;
+  name: string;
+  category: string;
+  tracksStock: boolean;
+  lowStockLevel: number;
+  costPrice: number;
+  sellingPrice: number;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+export type CatalogUnit = {
+  id: string;
+  itemId: string;
+  unitName: string;
+  unitsPerBase: number;
+  sellingPrice: number;
+  isBase: boolean;
+  sortOrder: number;
+  barcode: string | null;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+export type CatalogStock = {
+  itemId: string;
+  quantityBase: number;
+};
+
+export type CatalogSnapshot = {
+  serverTime: number;
+  items: CatalogItem[];
+  units: CatalogUnit[];
+  stock: CatalogStock[];
+};
+
 export interface StockMovement extends BaseEntity {
   itemId: string;
   type: StockMovementType;

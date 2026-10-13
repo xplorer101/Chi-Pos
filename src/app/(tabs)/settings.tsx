@@ -495,11 +495,18 @@ function AdminConnectionCard() {
   const status = useClientStore((state) => state.status);
   const pairing = useClientStore((state) => state.pairing);
   const shopName = useClientStore((state) => state.shopName);
+  const syncing = useClientStore((state) => state.syncing);
+  const syncError = useClientStore((state) => state.syncError);
+  const catalogSyncedAt = useClientStore((state) => state.catalogSyncedAt);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void useClientStore.getState().load();
   }, []);
+
+  const lastSynced = catalogSyncedAt
+    ? `Items synced ${formatDateTime(catalogSyncedAt)}`
+    : 'Items have not been synced yet';
 
   return (
     <Card>
@@ -517,6 +524,24 @@ function AdminConnectionCard() {
           {statusLabel(status)}
           {pairing ? ` · selling as ${pairing.userName}` : ''}
         </Text>
+        {pairing ? (
+          <>
+            <Divider />
+            <KeyValueRow label="Catalog" value={lastSynced} tone="muted" />
+            {syncError ? (
+              <Text variant="caption" tone="danger">
+                {syncError}
+              </Text>
+            ) : null}
+            <Button
+              label="Sync items now"
+              variant="secondary"
+              icon="cloud-download-outline"
+              loading={syncing}
+              onPress={() => void useClientStore.getState().syncCatalog()}
+            />
+          </>
+        ) : null}
         <Button
           label={pairing ? 'Manage connection' : 'Connect to admin'}
           icon="link-outline"

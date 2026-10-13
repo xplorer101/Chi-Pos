@@ -1,9 +1,11 @@
+import { readCatalog } from '@/db/repositories/catalogRepo';
 import { getSettings, getShopId } from '@/db/repositories/settingsRepo';
 import {
   claimDeviceToken,
   getDeviceByClientId,
   getDeviceByTokenHash,
   setDeviceToken,
+  touchDevice,
   upsertPendingDevice,
 } from '@/db/repositories/devicesRepo';
 
@@ -128,6 +130,15 @@ export function createHandler(ctx: ServerContext): HttpHandler {
       if (device.status === 'revoked') return json(200, { status: 'revoked' });
       if (device.status === 'approved') return json(200, { status: 'approved' });
       return json(200, { status: 'pending' });
+    }
+
+    if (request.method === 'GET' && pathname === '/catalog') {
+      const auth = await authenticate(request);
+      if (!auth) return json(401, { error: 'unauthorized', message: 'Pair this phone first.' });
+      await touchDevice(auth.deviceId, meta.remoteAddress || null);
+      const since = Number.parseInt(query.since ?? '0', 10) || 0;
+      const snapshot = await readCatalog(since);
+      return json(200, snapshot);
     }
 
     return json(404, { error: 'not_found', path: pathname });

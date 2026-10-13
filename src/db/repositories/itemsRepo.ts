@@ -46,6 +46,10 @@ const STOCK_SELECT = `
     SELECT SUM(sm.quantity_base)
       FROM stock_movements sm
      WHERE sm.item_id = i.id AND sm.deleted_at IS NULL
+  ), (
+    SELECT ss.quantity_base
+      FROM stock_snapshot ss
+     WHERE ss.item_id = i.id
   ), 0) AS stock
 `;
 
