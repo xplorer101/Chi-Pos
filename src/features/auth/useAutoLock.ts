@@ -9,13 +9,13 @@ import { idleFor, useSessionStore } from './sessionStore';
  * navigation, foregrounding and (implicitly) the idle timer itself; typing in a
  * form without navigating for the full window is the documented edge case.
  */
-export function useAutoLock(): void {
+export function useAutoLock(enabled = true): void {
   const status = useSessionStore((state) => state.status);
   const autoLockMinutes = useSessionStore((state) => state.autoLockMinutes);
   const lock = useSessionStore((state) => state.lock);
 
   useEffect(() => {
-    if (status !== 'unlocked') return;
+    if (!enabled || status !== 'unlocked') return;
     const { markBackgrounded, touch } = useSessionStore.getState();
 
     const threshold = autoLockMinutes * 60_000;
@@ -47,5 +47,5 @@ export function useAutoLock(): void {
       clearInterval(interval);
       subscription.remove();
     };
-  }, [status, autoLockMinutes, lock]);
+  }, [enabled, status, autoLockMinutes, lock]);
 }

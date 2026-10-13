@@ -21,6 +21,8 @@ import {
 import { listSales } from '@/db/repositories/salesRepo';
 import { can, canViewProfit } from '@/features/auth/permissions';
 import { useSessionStore } from '@/features/auth/sessionStore';
+import { BackupReminderBanner } from '@/features/backup/BackupReminderBanner';
+import { getBackupMeta } from '@/features/backup/backupMeta';
 import type { ActingUser } from '@/db/types';
 import {
   DAY,
@@ -96,6 +98,12 @@ function ReportsInner() {
   const { data: report, isLoading, error: reportError, refresh: refreshReport } = useLiveQuery(() => getReport(actor, range.start, range.end, { userId: staffId ?? undefined }), [range.start, range.end, staffId], 'reports');
   const { data: eod, error: eodError, refresh: refreshEod } = useLiveQuery(() => getEndOfDaySummary(actor), [period, staffId], 'reports');
   const { data: sales, error: salesError, refresh: refreshSales } = useLiveQuery(() => listSales(actor, { start: range.start, end: range.end, limit: 15 }), [range.start, range.end], 'reports');
+  const { data: backupMeta } = useLiveQuery(
+    () => getBackupMeta(),
+    [],
+    'reports-backup-meta',
+  );
+  const isOwner = actor.role === 'owner';
 
   const queryError = reportError ?? eodError ?? salesError;
   const retryQueries = () => {
@@ -134,6 +142,26 @@ function ReportsInner() {
           value={staffId ?? 'all'}
           onChange={(value) => setStaffId(value === 'all' ? null : value)}
         />
+      ) : null}
+
+      {isOwner ? (
+        <>
+          <BackupReminderBanner
+            onBackupNow={() => router.navigate('/settings')}
+            onOpenSettings={() => router.navigate('/settings')}
+          />
+          <Card>
+            <KeyValueRow
+              label="Last backup"
+              value={
+                backupMeta?.lastBackupAt == null
+                  ? 'Never'
+                  : `${formatDate(backupMeta.lastBackupAt)} · every ${backupMeta.reminderDays} days`
+              }
+              tone="muted"
+            />
+          </Card>
+        </>
       ) : null}
 
       {costBackfill != null ? (

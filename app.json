@@ -11,7 +11,10 @@
     "backgroundColor": "#F5F7FA",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.shoppos.app"
+      "bundleIdentifier": "com.shoppos.app",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "ShopPOS connects to other ShopPOS phones on your shop's Wi-Fi to sync items and sales."
+      }
     },
     "android": {
       "package": "com.shoppos.app",
@@ -23,7 +26,10 @@
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.RECORD_AUDIO",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.INTERNET"
       ],
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
@@ -67,7 +73,8 @@
         }
       ],
       "expo-sqlite",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-build-properties"
     ],
     "experiments": {
       "typedRoutes": false

@@ -2,6 +2,7 @@ import type {
   AuditEntry,
   Customer,
   CustomerWithBalance,
+  DeviceMode,
   Item,
   ItemUnit,
   ItemWithStock,
@@ -24,6 +25,9 @@ export type SettingsRow = {
   shop_address?: string | null;
   shop_phone?: string | null;
   auto_lock_minutes?: number | null;
+  device_mode?: string | null;
+  host_port?: number | null;
+  shop_id?: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -200,6 +204,9 @@ export function mapSettings(row: SettingsRow): Settings {
     shopAddress: row.shop_address ?? '',
     shopPhone: row.shop_phone ?? '',
     autoLockMinutes: row.auto_lock_minutes ?? 5,
+    deviceMode: (row.device_mode as DeviceMode) ?? 'standalone',
+    hostPort: row.host_port ?? 8799,
+    shopId: row.shop_id ?? null,
   };
 }
 

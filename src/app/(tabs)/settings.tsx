@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Switch, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
-import * as Sharing from 'expo-sharing';
 
 import { Badge } from '@/components/Badge';
 import { Button } from '@/components/Button';
@@ -15,20 +14,39 @@ import { Divider, KeyValueRow, SectionTitle } from '@/components/Section';
 import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
-import { writeBackupFile } from '@/db/export';
 import { loadSampleData } from '@/db/seed';
 import { getSettings, updateSettings } from '@/db/repositories/settingsRepo';
 import { changeOwnPin } from '@/db/repositories/usersRepo';
 import { promptBiometrics, setBiometricsEnabled } from '@/features/auth/biometrics';
 import { useSessionStore } from '@/features/auth/sessionStore';
+import { StatusChip, statusLabel } from '@/features/net/StatusChip';
+import { useClientStore } from '@/features/net/clientStore';
+import { deviceModeCaption, deviceModeLabel, setDeviceMode } from '@/features/net/deviceMode';
+import { BackupReminderBanner } from '@/features/backup/BackupReminderBanner';
+import { ExportBackupSheet } from '@/features/backup/ExportBackupSheet';
+import { RestoreBackupModal } from '@/features/backup/RestoreBackupModal';
+import { SafetyCopiesSheet } from '@/features/backup/SafetyCopiesSheet';
+import { getBackupMeta, setBackupReminderDays } from '@/features/backup/backupMeta';
+import { formatDateTime } from '@/lib/dates';
 import { isValidPin } from '@/lib/pin';
 import { roleCaption, roleLabel } from '@/lib/roles';
 import { useTheme } from '@/theme/theme';
-import type { ActingUser } from '@/db/types';
+import type { ActingUser, DeviceMode } from '@/db/types';
+
+const DEVICE_MODE_OPTIONS = [
+  { value: 'standalone', label: 'Standalone' },
+  { value: 'admin', label: 'Admin host' },
+  { value: 'cashier', label: 'Cashier' },
+];
 
 const AUTO_LOCK_OPTIONS = [1, 2, 5, 10, 15, 30].map((minutes) => ({
   value: String(minutes),
   label: `${minutes}m`,
+}));
+
+const REMINDER_OPTIONS = [1, 3, 7, 14, 30].map((days) => ({
+  value: String(days),
+  label: `${days} days`,
 }));
 
 export default function SettingsScreen() {
@@ -54,7 +72,18 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [pinSheetOpen, setPinSheetOpen] = useState(false);
   const [autoLockOpen, setAutoLockOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [backupSheetOpen, setBackupSheetOpen] = useState(false);
+  const [safetyOpen, setSafetyOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [modeOpen, setModeOpen] = useState(false);
   const [working, setWorking] = useState<string | null>(null);
+
+  const { data: backupMeta, refresh: refreshBackupMeta } = useLiveQuery(
+    () => getBackupMeta(),
+    [],
+    'backup-meta',
+  );
 
   useEffect(() => {
     if (!settings) return;
@@ -127,27 +156,6 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
         },
       ],
     );
-  };
-
-  const exportBackup = () => {
-    void (async () => {
-      setWorking('export');
-      try {
-        const uri = await writeBackupFile();
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(uri, {
-            mimeType: 'application/json',
-            dialogTitle: 'Export ShopPOS backup',
-          });
-        } else {
-          Alert.alert('Sharing not available', 'This device cannot share files.');
-        }
-      } catch (error) {
-        Alert.alert('Export failed', error instanceof Error ? error.message : String(error));
-      } finally {
-        setWorking(null);
-      }
-    })();
   };
 
   const switchUser = () => {
@@ -312,16 +320,92 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
 
       {isOwner ? (
         <View style={{ gap: theme.space(2) }}>
-          <SectionTitle>Data</SectionTitle>
+          <SectionTitle>Multi-device</SectionTitle>
           <Card>
             <View style={{ gap: theme.space(3) }}>
+              <KeyValueRow label="Device mode" value={deviceModeLabel(settings?.deviceMode ?? 'standalone')} />
+              <Text variant="caption" tone="muted">
+                {deviceModeCaption(settings?.deviceMode ?? 'standalone')}
+              </Text>
               <Button
-                label="Export backup (JSON)"
+                label="Change device mode"
                 variant="secondary"
-                icon="share-outline"
-                onPress={exportBackup}
-                loading={working === 'export'}
+                icon="git-branch-outline"
+                onPress={() => setModeOpen(true)}
               />
+              {settings?.deviceMode === 'admin' ? (
+                <Button
+                  label="Open admin host"
+                  icon="wifi-outline"
+                  onPress={() => router.push('/host')}
+                />
+              ) : null}
+              {settings?.deviceMode === 'cashier' ? (
+                <Button
+                  label="Open pairing screen"
+                  icon="link-outline"
+                  onPress={() => router.push('/connect')}
+                />
+              ) : null}
+              <Text variant="caption" tone="muted">
+                Multi-device runs entirely on your local Wi-Fi. No internet or cloud is involved.
+              </Text>
+            </View>
+          </Card>
+        </View>
+      ) : null}
+
+      {settings?.deviceMode === 'cashier' ? (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Admin connection</SectionTitle>
+          <AdminConnectionCard />
+        </View>
+      ) : null}
+
+      {isOwner ? (
+        <View style={{ gap: theme.space(2) }}>
+          <SectionTitle>Backup & restore</SectionTitle>
+          <BackupReminderBanner onBackupNow={() => setBackupSheetOpen(true)} />
+          <Card>
+            <View style={{ gap: theme.space(3) }}>
+              {backupMeta ? (
+                <>
+                  <KeyValueRow
+                    label="Last backup"
+                    value={
+                      backupMeta.lastBackupAt == null
+                        ? 'Never'
+                        : formatDateTime(backupMeta.lastBackupAt)
+                    }
+                    tone="muted"
+                  />
+                  <Divider />
+                </>
+              ) : null}
+              <Button
+                label="Back up now"
+                icon="share-outline"
+                onPress={() => setBackupSheetOpen(true)}
+              />
+              <Button
+                label="Restore a backup"
+                variant="secondary"
+                icon="cloud-download-outline"
+                onPress={() => setRestoreOpen(true)}
+              />
+              <Button
+                label="Safety copies"
+                variant="secondary"
+                icon="time-outline"
+                onPress={() => setSafetyOpen(true)}
+              />
+              <Button
+                label={`Remind me every ${backupMeta?.reminderDays ?? 7} days`}
+                variant="secondary"
+                icon="alarm-outline"
+                onPress={() => setReminderOpen(true)}
+              />
+              <Divider />
               <Button
                 label="Load sample data"
                 variant="secondary"
@@ -330,8 +414,8 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
                 loading={working === 'samples'}
               />
               <Text variant="caption" tone="muted">
-                Everything is stored on this device only. Nothing is sent anywhere — export a backup
-                before you clear the app or change phones.
+                Everything is stored on this device only. Nothing is sent anywhere. Export a backup
+                before you clear the app or change phones, and keep it somewhere safe.
               </Text>
             </View>
           </Card>
@@ -357,8 +441,199 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
         />
       ) : null}
 
+      {isOwner ? (
+        <ExportBackupSheet
+          visible={backupSheetOpen}
+          onClose={() => setBackupSheetOpen(false)}
+          actor={actor}
+          onExported={() => {
+            refreshBackupMeta();
+          }}
+        />
+      ) : null}
+
+      {isOwner ? (
+        <RestoreBackupModal
+          visible={restoreOpen}
+          onClose={() => setRestoreOpen(false)}
+          actor={actor}
+        />
+      ) : null}
+
+      {isOwner ? (
+        <SafetyCopiesSheet
+          visible={safetyOpen}
+          onClose={() => setSafetyOpen(false)}
+          actor={actor}
+        />
+      ) : null}
+
+      {isOwner ? (
+        <ReminderSheet
+          visible={reminderOpen}
+          onClose={() => setReminderOpen(false)}
+          current={backupMeta?.reminderDays ?? 7}
+        />
+      ) : null}
+
+      {isOwner ? (
+        <DeviceModeSheet
+          visible={modeOpen}
+          onClose={() => setModeOpen(false)}
+          current={settings?.deviceMode ?? 'standalone'}
+        />
+      ) : null}
+
       <ChangePinSheet visible={pinSheetOpen} onClose={() => setPinSheetOpen(false)} actor={actor} />
     </Screen>
+  );
+}
+
+function AdminConnectionCard() {
+  const theme = useTheme();
+  const router = useRouter();
+  const status = useClientStore((state) => state.status);
+  const pairing = useClientStore((state) => state.pairing);
+  const shopName = useClientStore((state) => state.shopName);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void useClientStore.getState().load();
+  }, []);
+
+  return (
+    <Card>
+      <View style={{ gap: theme.space(3) }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(3) }}>
+          <View style={{ flex: 1 }}>
+            <Text variant="bodyMedium">{shopName ?? 'Admin phone'}</Text>
+            <Text variant="caption" tone="muted">
+              {pairing ? `${pairing.host}:${pairing.port}` : 'No admin phone paired yet'}
+            </Text>
+          </View>
+          <StatusChip status={status} />
+        </View>
+        <Text variant="caption" tone="muted">
+          {statusLabel(status)}
+          {pairing ? ` · selling as ${pairing.userName}` : ''}
+        </Text>
+        <Button
+          label={pairing ? 'Manage connection' : 'Connect to admin'}
+          icon="link-outline"
+          loading={busy}
+          onPress={async () => {
+            setBusy(true);
+            await useClientStore.getState().ping().catch(() => false);
+            setBusy(false);
+            router.push('/connect');
+          }}
+        />
+      </View>
+    </Card>
+  );
+}
+
+function DeviceModeSheet({
+  visible,
+  onClose,
+  current,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  current: DeviceMode;
+}) {
+  const theme = useTheme();
+  const [mode, setMode] = useState<DeviceMode>(current);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible) setMode(current);
+  }, [visible, current]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setDeviceMode(mode);
+      if (mode !== 'cashier' && current !== 'cashier') {
+        onClose();
+        return;
+      }
+      onClose();
+      await useSessionStore.getState().restart();
+    } catch (error) {
+      Alert.alert('Could not change mode', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Device mode"
+      subtitle="Choose how this phone fits into the shop. Standalone keeps everything on this phone. Admin host serves other phones. Cashier pairs with an admin phone."
+      dismissable={!saving}
+      footer={
+        <Button label="Save" icon="checkmark" onPress={() => void save()} loading={saving} />
+      }
+    >
+      <View style={{ gap: theme.space(4) }}>
+        <ChipRow options={DEVICE_MODE_OPTIONS} value={mode} onChange={(value) => setMode(value as DeviceMode)} />
+        {mode === 'cashier' ? (
+          <Text variant="caption" tone="warning">
+            Saving will switch this phone into cashier mode and restart the app.
+          </Text>
+        ) : null}
+      </View>
+    </FormSheet>
+  );
+}
+
+function ReminderSheet({
+  visible,
+  onClose,
+  current,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  current: number;
+}) {
+  const theme = useTheme();
+  const [days, setDays] = useState(current);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible) setDays(current);
+  }, [visible, current]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setBackupReminderDays(days);
+      onClose();
+    } catch (error) {
+      Alert.alert('Could not save', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormSheet
+      visible={visible}
+      onClose={onClose}
+      title="Backup reminder"
+      subtitle="A gentle reminder appears until a backup has been made within this many days. Set 1 day to be nagged the most, or 30 days for the least."
+      dismissable={!saving}
+      footer={
+        <Button label="Save" icon="checkmark" onPress={() => void save()} loading={saving} />
+      }
+    >
+      <View style={{ gap: theme.space(4) }}>
+        <ChipRow options={REMINDER_OPTIONS} value={String(days)} onChange={(value) => setDays(Number(value))} />
+      </View>
+    </FormSheet>
   );
 }
 

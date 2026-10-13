@@ -12,6 +12,14 @@ export type SaleStatus = 'completed' | 'voided';
 
 export type Role = 'owner' | 'cashier';
 
+/**
+ * How this device participates in multi-device mode.
+ * - `standalone`: the classic single-phone setup (default).
+ * - `admin`: hosts the real database and a local server for cashier phones.
+ * - `cashier`: pairs with an admin phone and syncs over the local network.
+ */
+export type DeviceMode = 'standalone' | 'admin' | 'cashier';
+
 export interface BaseEntity {
   id: string;
   createdAt: number;
@@ -56,7 +64,9 @@ export type AuditAction =
   | 'staff_add'
   | 'staff_delete'
   | 'backup'
-  | 'restore';
+  | 'backup_failed'
+  | 'restore'
+  | 'restore_failed';
 
 export interface AuditEntry {
   id: string;
@@ -83,6 +93,12 @@ export interface Settings extends BaseEntity {
   shopPhone: string;
   /** Lock after this many minutes of inactivity. Defaults to 5. */
   autoLockMinutes: number;
+  /** Multi-device role for this installation. Defaults to `standalone`. */
+  deviceMode: DeviceMode;
+  /** Port the admin host server listens on. Defaults to 8799. */
+  hostPort: number;
+  /** Stable shop identifier shared with paired cashiers. Set once. */
+  shopId: string | null;
 }
 
 export interface Item extends BaseEntity {

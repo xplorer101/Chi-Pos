@@ -27,7 +27,9 @@ const ACTION_LABEL: Record<AuditAction, string> = {
   staff_add: 'Staff added',
   staff_delete: 'Staff deleted',
   backup: 'Backup',
+  backup_failed: 'Backup failed',
   restore: 'Restore',
+  restore_failed: 'Restore failed',
 };
 
 export default function AuditLogScreen() {

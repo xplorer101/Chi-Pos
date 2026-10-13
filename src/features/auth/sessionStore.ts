@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import { listUsers } from '@/db/repositories/usersRepo';
+import { listUsers, needsSetup } from '@/db/repositories/usersRepo';
 import { getSettings } from '@/db/repositories/settingsRepo';
 import type { ActingUser, User } from '@/db/types';
 
@@ -23,11 +23,19 @@ type SessionState = {
   boot: () => Promise<SessionStatus>;
   goToSetup: () => void;
   unlock: (user: User) => void;
+  /** Unlock directly as a known actor (used by paired cashier phones). */
+  unlockAs: (actor: ActingUser) => void;
   lock: () => void;
   refreshUsers: () => Promise<void>;
   touch: () => void;
   markBackgrounded: () => void;
   resync: () => Promise<void>;
+  /**
+   * After a restore, the users and PINs now come from the backup. Reset the
+   * whole session state and send the device back to the login (or setup)
+   * screen cleanly.
+   */
+  restart: () => Promise<void>;
   setAutoLockMinutes: (minutes: number) => void;
   setBiometrics: (patch: Partial<BiometricState>) => void;
 };
@@ -50,6 +58,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   unlock: (user) => {
     set({ currentUser: { id: user.id, name: user.name, role: user.role }, status: 'unlocked', lastActivity: Date.now() });
+  },
+
+  unlockAs: (actor) => {
+    set({ currentUser: { id: actor.id, name: actor.name, role: actor.role }, status: 'unlocked', lastActivity: Date.now() });
   },
 
   goToSetup: () => {
@@ -81,6 +93,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch {
       // DB may be unavailable mid-migration; keep whatever we have.
     }
+  },
+
+  restart: async () => {
+    set({ status: 'booting', currentUser: null, users: [], lastActivity: Date.now() });
+    if (!(await needsSetup())) {
+      await get().boot();
+      return;
+    }
+    const settings = await getSettings();
+    const users = await listUsers();
+    set({
+      autoLockMinutes: settings.autoLockMinutes,
+      users,
+      status: 'setup',
+      lastActivity: Date.now(),
+    });
   },
 
   setAutoLockMinutes: (minutes) => set({ autoLockMinutes: minutes }),

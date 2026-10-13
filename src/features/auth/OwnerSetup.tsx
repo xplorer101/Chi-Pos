@@ -6,6 +6,7 @@ import { Card } from '@/components/Card';
 import { Input } from '@/components/Input';
 import { Text } from '@/components/Text';
 import { createOwner } from '@/db/repositories/usersRepo';
+import { RestoreBackupModal } from '@/features/backup/RestoreBackupModal';
 import { isValidPin } from '@/lib/pin';
 import { useTheme } from '@/theme/theme';
 import type { User } from '@/db/types';
@@ -26,6 +27,7 @@ export function OwnerSetup() {
   const [confirm, setConfirm] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [restoreOpen, setRestoreOpen] = useState(false);
 
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [owner, setOwner] = useState<User | null>(null);
@@ -180,6 +182,19 @@ export function OwnerSetup() {
           <Button label="Continue" icon="arrow-forward" onPress={() => void submit()} loading={creating} />
         </View>
       </Card>
+
+      <Button
+        label="I have a ShopPOS backup - restore it instead"
+        variant="outline"
+        icon="cloud-download-outline"
+        onPress={() => setRestoreOpen(true)}
+      />
+
+      <RestoreBackupModal
+        visible={restoreOpen}
+        onClose={() => setRestoreOpen(false)}
+        actor={null}
+      />
     </ScrollView>
   );
 }

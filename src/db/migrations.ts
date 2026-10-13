@@ -328,6 +328,49 @@ export const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 8,
+    name: 'multi_device',
+    sql: `
+      ALTER TABLE settings ADD COLUMN device_mode TEXT NOT NULL DEFAULT 'standalone';
+      ALTER TABLE settings ADD COLUMN host_port INTEGER NOT NULL DEFAULT 8799;
+      ALTER TABLE settings ADD COLUMN shop_id TEXT;
+
+      CREATE TABLE devices (
+        id TEXT PRIMARY KEY NOT NULL,
+        client_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        user_id TEXT,
+        role TEXT NOT NULL DEFAULT 'cashier',
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','revoked')),
+        token_hash TEXT,
+        token_plain TEXT,
+        claim_hash TEXT,
+        last_ip TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        approved_at INTEGER,
+        last_seen_at INTEGER
+      );
+
+      CREATE UNIQUE INDEX idx_devices_client ON devices(client_id);
+      CREATE INDEX idx_devices_status ON devices(status);
+
+      CREATE TABLE outbox (
+        id TEXT PRIMARY KEY NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('sale','debt_payment')),
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        sent_at INTEGER
+      );
+
+      CREATE INDEX idx_outbox_status ON outbox(status, created_at);
+    `,
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -14,6 +14,8 @@ import { OwnerSetup } from '@/features/auth/OwnerSetup';
 import { useSessionStore } from '@/features/auth/sessionStore';
 import { useAutoLock } from '@/features/auth/useAutoLock';
 import { UserSwitch } from '@/features/auth/UserSwitch';
+import { CashierBoot } from '@/features/net/CashierBoot';
+import { useDeviceModeStore } from '@/features/net/deviceMode';
 import { ThemeProvider, useTheme } from '@/theme/theme';
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -35,6 +37,7 @@ function RootGate() {
   const [booted, setBooted] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
+  const deviceMode = useDeviceModeStore((state) => state.mode);
 
   useEffect(() => {
     let mounted = true;
@@ -46,12 +49,21 @@ function RootGate() {
           import('@/db/repositories/settingsRepo'),
         ]);
         const settings = await getSettings();
-        if (mounted) setShopName(settings.shopName);
-        const setup = await needsSetup();
+        if (mounted) {
+          setShopName(settings.shopName);
+          useDeviceModeStore.getState().setMode(settings.deviceMode);
+        }
         const available = await hasBiometricHardware();
         const enabled = available ? await isBiometricsEnabled() : false;
         if (!mounted) return;
         useSessionStore.getState().setBiometrics({ available, enabled });
+
+        // A cashier phone is driven entirely by its pairing, not local accounts.
+        if (settings.deviceMode === 'cashier') {
+          return;
+        }
+
+        const setup = await needsSetup();
         if (setup) {
           useSessionStore.getState().goToSetup();
         } else {
@@ -72,7 +84,7 @@ function RootGate() {
     };
   }, []);
 
-  useAutoLock();
+  useAutoLock(deviceMode !== 'cashier');
 
   if (!booted) {
     return <View style={{ flex: 1, backgroundColor: theme.colors.bg }} />;
@@ -103,7 +115,9 @@ function RootGate() {
     <>
       <StatusBar style="auto" />
       <Toast />
-      {status === 'setup' ? (
+      {deviceMode === 'cashier' && status !== 'unlocked' ? (
+        <CashierBoot />
+      ) : status === 'setup' ? (
         <OwnerSetup />
       ) : status === 'locked' ? (
         <UserSwitch shopName={shopName} />
