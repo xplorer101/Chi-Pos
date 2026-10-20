@@ -15,15 +15,13 @@ import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import {
-  createCustomer,
   deleteCustomer,
   getCustomer,
   getCustomerHistory,
-  recordDebtPayment,
-  updateCustomer,
 } from '@/db/repositories/customersRepo';
 import { can } from '@/features/auth/permissions';
 import { useSessionStore } from '@/features/auth/sessionStore';
+import { submitCustomer, submitCustomerUpdate, submitDebtPayment } from '@/features/net/salesQueue';
 import { formatDateTime } from '@/lib/dates';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
@@ -76,9 +74,9 @@ function CustomerScreenInner() {
     setError(null);
     try {
       if (isNew) {
-        await createCustomer(actor, { name: name.trim(), phone: phone.trim(), notes: notes.trim() });
+        await submitCustomer(actor, { name: name.trim(), phone: phone.trim(), notes: notes.trim() });
       } else {
-        await updateCustomer(actor, customerId, {
+        await submitCustomerUpdate(actor, customerId, {
           name: name.trim(),
           phone: phone.trim(),
           notes: notes.trim(),
@@ -326,7 +324,7 @@ function PaymentSheet({
     setSaving(true);
     setError(null);
     try {
-      await recordDebtPayment(actor, {
+      await submitDebtPayment(actor, {
         customerId,
         amount,
         method,

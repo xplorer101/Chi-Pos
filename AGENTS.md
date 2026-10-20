@@ -39,3 +39,15 @@ Docs: https://docs.expo.dev/eas/index.md
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## Multi-device architecture
+
+The shop can run on one phone (standalone) or on an admin phone plus cashier phones over the local Wi-Fi (`settings.deviceMode`).
+
+- **Admin host** (`src/features/net/hostStore.ts`, `routes.ts`, `tcp.ts`): an HTTP server on `0.0.0.0:8799` (raw TCP via `react-native-tcp-socket`, so it needs a development build). It serves `/health`, `/pair/request`, `/pair/status`, `/catalog`, `/stock`, `/sales`, `/debtor-payments` and `/customers`. The admin auto-starts the server while `deviceMode === 'admin'`.
+- **Cashier client** (`src/features/net/clientStore.ts`, `salesQueue.ts`, `syncWatcher.ts`): pairs with a key, mirrors the catalog into the local DB, and writes every sale, debt payment and customer it creates into the `outbox` table (shared UUID = idempotency key) before pushing it. The queue drains oldest-first with customers ahead of everything else, and stops at the first network error; failed entries are retried, never dropped.
+- **Pairing security**: the QR carries `PairingInfo` JSON (`protocol.parsePairingInfo`). A key lasts 10 minutes and pairs one phone (`pairingKey.ts`); five wrong keys pause pairing for a minute. Only `cashier` accounts can be bound to a phone (`hostStore.approve`).
+- **Sync triggers**: after every write, on app foreground, on network recovery, and by a 30 s retry timer while the queue is non-empty. A flush is serialized by a lock and is followed by a catalog pull when the queue empties.
+- **Data ownership**: the admin DB is the source of truth. Cashier phones keep mirrors (`stock_snapshot`, `customer_balance_snapshot`) and never block a sale on stock, so negative stock is a signal for the admin to reconcile, not an error.
+
+When adding a new synced record, follow the pattern: outbox kind + `POST` route with token auth + idempotent admin-side upsert, then enqueue from `salesQueue.ts`.

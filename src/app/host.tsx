@@ -24,6 +24,13 @@ import type { User } from '@/db/types';
 
 const KEEP_AWAKE_TAG = 'shoppos-host';
 
+function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 export default function HostScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -36,11 +43,15 @@ export default function HostScreen() {
   const ip = useHostStore((state) => state.ip);
   const port = useHostStore((state) => state.port);
   const pairingKey = useHostStore((state) => state.pairingKey);
+  const pairingKeyExpiresAt = useHostStore((state) => state.pairingKeyExpiresAt);
+  const pairingKeyUsed = useHostStore((state) => state.pairingKeyUsed);
+  const pairLockedUntil = useHostStore((state) => state.pairLockedUntil);
   const shopId = useHostStore((state) => state.shopId);
   const devices = useHostStore((state) => state.devices);
   const lastEvent = useHostStore((state) => state.lastEvent);
 
   const [approving, setApproving] = useState<DeviceRecord | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   const tcpAvailable = isTcpAvailable();
 
@@ -65,6 +76,14 @@ export default function HostScreen() {
     return () => clearInterval(timer);
   }, [running]);
 
+  // Drives the "expires in" and lockout countdowns.
+  useEffect(() => {
+    if (!running) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+
   if (!isOwner) {
     return (
       <Screen title="Admin host" onBack={() => router.back()}>
@@ -77,9 +96,15 @@ export default function HostScreen() {
     );
   }
 
-  const pairingJson = running && ip && pairingKey && shopId
-    ? JSON.stringify({ v: PROTOCOL_VERSION, ip, port, shopId, key: pairingKey, name: 'ShopPOS' })
-    : '';
+  const keyExpiresInMs = pairingKeyExpiresAt ? pairingKeyExpiresAt - now : 0;
+  const keyExpired = pairingKeyExpiresAt !== null && keyExpiresInMs <= 0;
+  const keyActive = Boolean(pairingKey) && !pairingKeyUsed && !keyExpired;
+  const pairLocked = pairLockedUntil !== null && pairLockedUntil > now;
+
+  const pairingJson =
+    running && ip && shopId && keyActive && pairingKey
+      ? JSON.stringify({ v: PROTOCOL_VERSION, ip, port, shopId, key: pairingKey, name: 'ShopPOS' })
+      : '';
 
   const pending = devices.filter((device) => device.status === 'pending');
   const approved = devices.filter((device) => device.status === 'approved');
@@ -129,7 +154,11 @@ export default function HostScreen() {
               <>
                 <KeyValueRow label="Address" value={ip ? `${ip}:${port}` : `Port ${port}`} emphasise />
                 <Divider />
-                <KeyValueRow label="Pairing key" value={pairingKey ?? '—'} />
+                <KeyValueRow
+                  label="Pairing key"
+                  value={keyActive ? (pairingKey ?? '—') : pairingKeyUsed ? 'Used' : keyExpired ? 'Expired' : '—'}
+                  tone={keyActive ? 'default' : 'muted'}
+                />
                 <KeyValueRow label="Cashier phones" value={String(approved.length)} tone="muted" />
                 <KeyValueRow label="Last activity" value={lastEvent ?? '—'} tone="muted" />
                 <Divider />
@@ -164,9 +193,14 @@ export default function HostScreen() {
                   <QRCode value={pairingJson} size={196} />
                 </View>
               ) : (
-                <Text variant="caption" tone="warning" center>
-                  Connect this phone to Wi-Fi to show a scannable address, or read the port and key
-                  to the cashier.
+                <Text variant="caption" tone={keyActive ? 'warning' : 'muted'} center>
+                  {keyActive
+                    ? 'Connect this phone to Wi-Fi to show a scannable address, or read the port and key to the cashier.'
+                    : pairingKeyUsed
+                      ? 'This key has been used. Generate a new key to pair another phone.'
+                      : keyExpired
+                        ? 'This key has expired. Generate a new key to pair another phone.'
+                        : 'Start hosting to show a pairing code.'}
                 </Text>
               )}
               <Text variant="caption" tone="muted" center>
@@ -174,7 +208,33 @@ export default function HostScreen() {
                 type the address and pairing key).
               </Text>
               <KeyValueRow label="Address" value={ip ? `${ip}:${port}` : `${port}`} />
-              <KeyValueRow label="Key" value={pairingKey ?? '—'} />
+              <KeyValueRow
+                label="Key"
+                value={
+                  keyActive
+                    ? (pairingKey ?? '—')
+                    : pairingKeyUsed
+                      ? 'Used — generate a new key'
+                      : 'Expired — generate a new key'
+                }
+                tone={keyActive ? 'default' : 'muted'}
+              />
+              {pairLocked && pairLockedUntil !== null ? (
+                <Text variant="caption" tone="danger" center>
+                  Too many wrong keys. Pairing is paused for{' '}
+                  {Math.ceil((pairLockedUntil - now) / 1000)}s.
+                </Text>
+              ) : keyActive ? (
+                <Text variant="caption" tone="muted" center>
+                  Single use · expires in {formatCountdown(keyExpiresInMs)}
+                </Text>
+              ) : null}
+              <Button
+                label="Generate new key"
+                variant="secondary"
+                icon="refresh-outline"
+                onPress={() => void useHostStore.getState().regenerateKey()}
+              />
             </View>
           </Card>
         </View>
@@ -298,8 +358,8 @@ function ApproveSheet({
     setSaving(false);
     void (async () => {
       const all = await listUsers();
-      const cashiers = all.filter((user) => user.role === 'cashier');
-      setUsers(cashiers.length > 0 ? cashiers : all);
+      // Owner accounts are never offered: a phone may only sell as a cashier.
+      setUsers(all.filter((user) => user.role === 'cashier'));
     })();
   }, [device]);
 

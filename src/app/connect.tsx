@@ -3,6 +3,7 @@ import { Alert, View } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import { Badge } from '@/components/Badge';
+import { BarcodeScanner } from '@/components/BarcodeScanner';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
 import { Input } from '@/components/Input';
@@ -13,6 +14,7 @@ import { useSessionStore } from '@/features/auth/sessionStore';
 import { StatusChip, statusLabel } from '@/features/net/StatusChip';
 import { useClientStore } from '@/features/net/clientStore';
 import { setDeviceMode } from '@/features/net/deviceMode';
+import { PROTOCOL_VERSION, parsePairingInfo } from '@/features/net/protocol';
 import { useTheme } from '@/theme/theme';
 
 const DEFAULT_PORT = 8799;
@@ -31,12 +33,31 @@ export default function ConnectScreen() {
   const [port, setPort] = useState(String(DEFAULT_PORT));
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
     void useClientStore.getState().load();
   }, []);
 
   const connected = status === 'connected' || status === 'offline';
+
+  const handleScannedPairing = (data: string) => {
+    const info = parsePairingInfo(data);
+    if (!info) {
+      Alert.alert(
+        'Not a pairing code',
+        'That QR code is not from a ShopPOS admin phone. Use the code shown under Admin host.',
+      );
+      return;
+    }
+    if (info.v > PROTOCOL_VERSION) {
+      Alert.alert('Update this phone', 'The admin phone is running a newer version. Update ShopPOS first.');
+      return;
+    }
+    setHost(info.ip);
+    setPort(String(info.port));
+    setKey(info.key.toUpperCase());
+  };
 
   const pair = async () => {
     const portNumber = Number.parseInt(port, 10);
@@ -144,9 +165,15 @@ export default function ConnectScreen() {
             <View style={{ gap: theme.space(3) }}>
               <Text variant="caption" tone="muted">
                 On the admin phone, open Settings → Admin host and start hosting. Then scan its QR
-                code (coming next) or type the address and key below. The admin must approve this
-                phone before it can sell.
+                code or type the address and key below. The admin must approve this phone before it
+                can sell.
               </Text>
+              <Button
+                label="Scan admin QR code"
+                variant="secondary"
+                icon="qr-code-outline"
+                onPress={() => setScanning(true)}
+              />
               <Input label="Admin address" value={host} onChangeText={setHost} placeholder="192.168.1.10" autoCapitalize="none" keyboardType="numbers-and-punctuation" />
               <Input label="Port" value={port} onChangeText={setPort} keyboardType="number-pad" />
               <Input label="Pairing key" value={key} onChangeText={setKey} placeholder="ABCD-EFGH" autoCapitalize="characters" />
@@ -188,6 +215,13 @@ export default function ConnectScreen() {
           </Card>
         </View>
       ) : null}
+
+      <BarcodeScanner
+        visible={scanning}
+        onClose={() => setScanning(false)}
+        onScan={handleScannedPairing}
+        hint="Point the camera at the admin QR code"
+      />
     </Screen>
   );
 }

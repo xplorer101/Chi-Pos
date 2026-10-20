@@ -425,33 +425,43 @@ function ReportsInner() {
         <View style={{ gap: theme.space(2) }}>
           <SectionTitle>Low stock</SectionTitle>
           <Card padded={false}>
-            {report.lowStock.map((item, index) => (
-              <Pressable
-                key={item.id}
-                onPress={() => router.push(`/item/${item.id}`)}
-                style={({ pressed }) => ({
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: theme.space(3),
-                  paddingHorizontal: theme.space(4),
-                  paddingVertical: theme.space(3),
-                  borderTopWidth: index === 0 ? 0 : 1,
-                  borderTopColor: theme.colors.border,
-                  backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent',
-                })}
-              >
-                <Ionicons name="alert-circle-outline" size={17} color={theme.colors.warning} />
-                <View style={{ flex: 1 }}>
-                  <Text variant="bodyMedium" numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text variant="caption" tone="muted">
-                    alert at {item.lowStockLevel}
-                  </Text>
-                </View>
-                <Badge label={`${item.stock} left`} tone="warning" />
-              </Pressable>
-            ))}
+            {report.lowStock.map((item, index) => {
+              const negative = item.stock < 0;
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => router.push(`/item/${item.id}`)}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: theme.space(3),
+                    paddingHorizontal: theme.space(4),
+                    paddingVertical: theme.space(3),
+                    borderTopWidth: index === 0 ? 0 : 1,
+                    borderTopColor: theme.colors.border,
+                    backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent',
+                  })}
+                >
+                  <Ionicons
+                    name={negative ? 'warning-outline' : 'alert-circle-outline'}
+                    size={17}
+                    color={negative ? theme.colors.danger : theme.colors.warning}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text variant="bodyMedium" numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text variant="caption" tone={negative ? 'danger' : 'muted'}>
+                      {negative ? 'sold past stock · ' : ''}alert at {item.lowStockLevel}
+                    </Text>
+                  </View>
+                  <Badge
+                    label={negative ? `Oversold ${Math.abs(item.stock)}` : `${item.stock} left`}
+                    tone={negative ? 'danger' : 'warning'}
+                  />
+                </Pressable>
+              );
+            })}
           </Card>
         </View>
       ) : null}

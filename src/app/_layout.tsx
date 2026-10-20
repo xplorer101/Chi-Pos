@@ -16,6 +16,8 @@ import { useAutoLock } from '@/features/auth/useAutoLock';
 import { UserSwitch } from '@/features/auth/UserSwitch';
 import { CashierBoot } from '@/features/net/CashierBoot';
 import { useDeviceModeStore } from '@/features/net/deviceMode';
+import { useHostStore } from '@/features/net/hostStore';
+import { startSyncWatcher } from '@/features/net/syncWatcher';
 import { ThemeProvider, useTheme } from '@/theme/theme';
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -85,6 +87,21 @@ function RootGate() {
   }, []);
 
   useAutoLock(deviceMode !== 'cashier');
+
+  // An admin phone is the shop server: bring it up as soon as the app boots so
+  // cashier phones can sync without the owner opening the host screen first.
+  useEffect(() => {
+    if (!booted || deviceMode !== 'admin') return;
+    const host = useHostStore.getState();
+    if (!host.running && !host.starting) void host.start();
+  }, [booted, deviceMode]);
+
+  // A cashier phone keeps itself in step: drain the queue and refresh the
+  // catalog whenever the network comes back or the app is foregrounded.
+  useEffect(() => {
+    if (deviceMode !== 'cashier') return;
+    return startSyncWatcher();
+  }, [deviceMode]);
 
   if (!booted) {
     return <View style={{ flex: 1, backgroundColor: theme.colors.bg }} />;

@@ -15,6 +15,7 @@ import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
 import { useLiveQuery } from '@/db/hooks';
 import { loadSampleData } from '@/db/seed';
+import { listFailed, retryEntry, type OutboxRecord } from '@/db/repositories/outboxRepo';
 import { getSettings, updateSettings } from '@/db/repositories/settingsRepo';
 import { changeOwnPin } from '@/db/repositories/usersRepo';
 import { promptBiometrics, setBiometricsEnabled } from '@/features/auth/biometrics';
@@ -489,6 +490,12 @@ function SettingsInner({ actor }: { actor: ActingUser }) {
   );
 }
 
+function outboxKindLabel(entry: OutboxRecord): string {
+  if (entry.kind === 'customer') return 'Customer';
+  if (entry.kind === 'debt_payment') return 'Debt payment';
+  return 'Sale';
+}
+
 function AdminConnectionCard() {
   const theme = useTheme();
   const router = useRouter();
@@ -498,7 +505,11 @@ function AdminConnectionCard() {
   const syncing = useClientStore((state) => state.syncing);
   const syncError = useClientStore((state) => state.syncError);
   const catalogSyncedAt = useClientStore((state) => state.catalogSyncedAt);
+  const pending = useClientStore((state) => state.pending);
+  const { data: failedRows } = useLiveQuery(() => listFailed(), [], 'outbox-failed');
+  const failedEntries = failedRows ?? [];
   const [busy, setBusy] = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   useEffect(() => {
     void useClientStore.getState().load();
@@ -507,6 +518,26 @@ function AdminConnectionCard() {
   const lastSynced = catalogSyncedAt
     ? `Items synced ${formatDateTime(catalogSyncedAt)}`
     : 'Items have not been synced yet';
+
+  const retryOne = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await retryEntry(id);
+      await useClientStore.getState().syncNow();
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  const retryAll = async () => {
+    setRetryingId('all');
+    try {
+      for (const entry of failedEntries) await retryEntry(entry.id);
+      await useClientStore.getState().syncNow();
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   return (
     <Card>
@@ -528,17 +559,73 @@ function AdminConnectionCard() {
           <>
             <Divider />
             <KeyValueRow label="Catalog" value={lastSynced} tone="muted" />
+            <KeyValueRow
+              label="Waiting to sync"
+              value={pending === 0 ? 'All synced' : `${pending} change${pending === 1 ? '' : 's'}`}
+              tone={pending === 0 ? 'muted' : 'default'}
+            />
+            {failedEntries.length > 0 ? (
+              <View style={{ gap: theme.space(2) }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(2) }}>
+                  <Text variant="caption" tone="danger" style={{ flex: 1 }}>
+                    {failedEntries.length} change{failedEntries.length === 1 ? '' : 's'} did not reach the
+                    admin
+                  </Text>
+                  {failedEntries.length > 1 ? (
+                    <Button
+                      label="Retry all"
+                      size="sm"
+                      variant="ghost"
+                      fullWidth={false}
+                      loading={retryingId === 'all'}
+                      onPress={() => void retryAll()}
+                    />
+                  ) : null}
+                </View>
+                {failedEntries.slice(0, 5).map((entry) => (
+                  <View
+                    key={entry.id}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space(2) }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text variant="bodyMedium">{outboxKindLabel(entry)}</Text>
+                      <Text variant="caption" tone="danger" numberOfLines={2}>
+                        {entry.lastError ?? 'No response from the admin.'}
+                      </Text>
+                    </View>
+                    <Button
+                      label="Retry"
+                      size="sm"
+                      variant="ghost"
+                      fullWidth={false}
+                      loading={retryingId === entry.id}
+                      onPress={() => void retryOne(entry.id)}
+                    />
+                  </View>
+                ))}
+                {failedEntries.length > 5 ? (
+                  <Text variant="caption" tone="muted">
+                    and {failedEntries.length - 5} more
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             {syncError ? (
               <Text variant="caption" tone="danger">
                 {syncError}
               </Text>
             ) : null}
             <Button
-              label="Sync items now"
+              label="Sync now"
               variant="secondary"
               icon="cloud-download-outline"
               loading={syncing}
-              onPress={() => void useClientStore.getState().syncCatalog()}
+              onPress={() => {
+                void (async () => {
+                  await useClientStore.getState().flushOutbox();
+                  await useClientStore.getState().syncCatalog();
+                })();
+              }}
             />
           </>
         ) : null}

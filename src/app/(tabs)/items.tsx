@@ -53,6 +53,7 @@ export default function ItemsScreen() {
 
   const list = items ?? [];
   const lowCount = list.filter((item) => isLowStock(item, item.stock)).length;
+  const negativeCount = list.filter((item) => item.tracksStock && item.stock < 0).length;
 
   const openNewItem = (barcode: string | null = null) => {
     setScannerOpen(false);
@@ -174,6 +175,25 @@ export default function ItemsScreen() {
         />
       ) : (
         <View style={{ gap: theme.space(2) }}>
+          {negativeCount > 0 ? (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
+                backgroundColor: theme.colors.dangerSoft,
+                borderRadius: theme.radius.md,
+                padding: theme.space(3),
+              }}
+            >
+              <Ionicons name="warning-outline" size={17} color={theme.colors.danger} />
+              <Text variant="label" tone="danger" style={{ flex: 1 }}>
+                {negativeCount} item{negativeCount === 1 ? '' : 's'} sold past stock — the count is
+                below zero
+              </Text>
+            </View>
+          ) : null}
+
           {lowCount > 0 ? (
             <View
               style={{
@@ -193,6 +213,7 @@ export default function ItemsScreen() {
           ) : null}
 
           {list.map((item) => {
+            const negative = item.tracksStock && item.stock < 0;
             const low = isLowStock(item, item.stock);
             return (
               <Pressable
@@ -202,7 +223,11 @@ export default function ItemsScreen() {
                   backgroundColor: pressed ? theme.colors.surfacePressed : theme.colors.surface,
                   borderRadius: theme.radius.lg,
                   borderWidth: 1,
-                  borderColor: low ? theme.colors.warning : theme.colors.border,
+                  borderColor: negative
+                    ? theme.colors.danger
+                    : low
+                      ? theme.colors.warning
+                      : theme.colors.border,
                   padding: theme.space(3),
                   gap: 6,
                 })}
@@ -233,9 +258,13 @@ export default function ItemsScreen() {
                     <>
                       <Badge
                         label={`Stock ${item.stock}`}
-                        tone={low ? 'warning' : 'success'}
+                        tone={negative ? 'danger' : low ? 'warning' : 'success'}
                       />
-                      {low ? <Badge label="Low stock" tone="warning" /> : null}
+                      {negative ? (
+                        <Badge label="Oversold" tone="danger" />
+                      ) : low ? (
+                        <Badge label="Low stock" tone="warning" />
+                      ) : null}
                       {item.lowStockLevel > 0 ? (
                         <Text variant="caption" tone="faint">
                           reorder at {item.lowStockLevel}
