@@ -21,6 +21,11 @@ export async function getDeviceMode(): Promise<DeviceMode> {
   return (await getSettings()).deviceMode;
 }
 
+/** Synchronous check against the mirrored store, for hot paths like selling. */
+export function isCashierDevice(): boolean {
+  return useDeviceModeStore.getState().mode === 'cashier';
+}
+
 export async function setDeviceMode(mode: DeviceMode): Promise<void> {
   await updateSettings({ deviceMode: mode });
   useDeviceModeStore.getState().setMode(mode);

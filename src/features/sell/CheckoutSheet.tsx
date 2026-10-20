@@ -9,8 +9,9 @@ import { MoneyInput } from '@/components/Input';
 import { KeyValueRow } from '@/components/Section';
 import { FormSheet } from '@/components/FormSheet';
 import { Text } from '@/components/Text';
-import { createSale, SaleError } from '@/db/repositories/salesRepo';
+import { SaleError } from '@/db/repositories/salesRepo';
 import { useSessionStore } from '@/features/auth/sessionStore';
+import { submitSale } from '@/features/net/salesQueue';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
 import type { ActingUser } from '@/db/types';
@@ -104,7 +105,7 @@ export function CheckoutSheet({ visible, onClose, onCompleted, onPickCustomer }:
     setSubmitting(true);
     setError(null);
     try {
-      const sale = await createSale(actor, {
+      const sale = await submitSale(actor, {
         customerId,
         discount: totals.discount,
         lines: lines.map((line) => ({

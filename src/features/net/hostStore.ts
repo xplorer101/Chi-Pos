@@ -11,9 +11,10 @@ import {
 import { getSettings, getShopId } from '@/db/repositories/settingsRepo';
 import { getUser } from '@/db/repositories/usersRepo';
 
+import { createPairingGuard, type PairingKeyState } from './pairingKey';
 import { createHandler } from './routes';
 import { createHttpServer, isTcpAvailable } from './tcp';
-import { generateDeviceToken, generatePairingKey, hashSecret } from './tokens';
+import { generateDeviceToken, hashSecret } from './tokens';
 
 type HostState = {
   running: boolean;
@@ -22,6 +23,9 @@ type HostState = {
   ip: string | null;
   port: number;
   pairingKey: string | null;
+  pairingKeyExpiresAt: number | null;
+  pairingKeyUsed: boolean;
+  pairLockedUntil: number | null;
   shopId: string | null;
   requestsServed: number;
   lastEvent: string | null;
@@ -30,13 +34,24 @@ type HostState = {
   start: () => Promise<void>;
   stop: () => void;
   refresh: () => Promise<void>;
+  regenerateKey: () => Promise<void>;
   approve: (deviceId: string, userId: string) => Promise<void>;
   revoke: (deviceId: string) => Promise<void>;
   remove: (deviceId: string) => Promise<void>;
 };
 
 let server: { listen: (port: number) => void; stop: () => void } | null = null;
-let pairingKey: string | null = null;
+const pairing = createPairingGuard();
+
+/** Spread into a set() call so the store mirrors the guard exactly. */
+function appliedPairing(state: PairingKeyState) {
+  return {
+    pairingKey: state.key,
+    pairingKeyExpiresAt: state.expiresAt,
+    pairingKeyUsed: state.used,
+    pairLockedUntil: state.lockedUntil,
+  };
+}
 
 export const useHostStore = create<HostState>((set, get) => ({
   running: false,
@@ -45,6 +60,9 @@ export const useHostStore = create<HostState>((set, get) => ({
   ip: null,
   port: 8799,
   pairingKey: null,
+  pairingKeyExpiresAt: null,
+  pairingKeyUsed: false,
+  pairLockedUntil: null,
   shopId: null,
   requestsServed: 0,
   lastEvent: null,
@@ -59,10 +77,13 @@ export const useHostStore = create<HostState>((set, get) => ({
       }
       const settings = await getSettings();
       const shopId = await getShopId();
-      pairingKey = await generatePairingKey();
+      const keyState = await pairing.issue();
 
       const handler = createHandler({
-        getPairingKey: () => pairingKey,
+        getPairingKey: pairing.currentKey,
+        getPairingLock: pairing.lock,
+        onPairingSucceeded: () => set(appliedPairing(pairing.noteSuccess())),
+        onPairingFailed: () => set({ pairLockedUntil: pairing.noteFailure().lockedUntil }),
         onRequest: (label) => set((state) => ({ requestsServed: state.requestsServed + 1, lastEvent: label })),
       });
 
@@ -81,7 +102,7 @@ export const useHostStore = create<HostState>((set, get) => ({
         running: true,
         starting: false,
         port: settings.hostPort,
-        pairingKey,
+        ...appliedPairing(keyState),
         shopId,
         ip,
         requestsServed: 0,
@@ -90,10 +111,14 @@ export const useHostStore = create<HostState>((set, get) => ({
       await get().refresh();
     } catch (error) {
       server = null;
-      pairingKey = null;
+      pairing.clear();
       set({
         running: false,
         starting: false,
+        pairingKey: null,
+        pairingKeyExpiresAt: null,
+        pairingKeyUsed: false,
+        pairLockedUntil: null,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -106,8 +131,11 @@ export const useHostStore = create<HostState>((set, get) => ({
       // already closed
     }
     server = null;
-    pairingKey = null;
-    set({ running: false, pairingKey: null, lastEvent: 'Server stopped' });
+    set({
+      running: false,
+      ...appliedPairing(pairing.clear()),
+      lastEvent: 'Server stopped',
+    });
   },
 
   refresh: async () => {
@@ -115,9 +143,19 @@ export const useHostStore = create<HostState>((set, get) => ({
     set({ devices });
   },
 
+  regenerateKey: async () => {
+    if (!get().running) return;
+    set(appliedPairing(await pairing.issue()));
+  },
+
   approve: async (deviceId, userId) => {
     const user = await getUser(userId);
     if (!user) throw new Error('That staff member no longer exists.');
+    // Enforced here as well as in the sheet: an owner account must never be
+    // bound to a cashier phone, whatever the UI sends.
+    if (user.role !== 'cashier') {
+      throw new Error('Only cashier accounts can be paired to a phone.');
+    }
     const token = await generateDeviceToken();
     const tokenHash = await hashSecret(token);
     await approveDevice({

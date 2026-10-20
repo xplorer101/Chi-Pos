@@ -1,7 +1,7 @@
 import { getDb } from '../index';
 import { bumpRevision } from '../store';
 
-export type OutboxKind = 'sale' | 'debt_payment';
+export type OutboxKind = 'sale' | 'debt_payment' | 'customer';
 export type OutboxStatus = 'pending' | 'sent' | 'failed';
 
 export type OutboxRow = {
@@ -63,11 +63,52 @@ export async function enqueue(input: {
   bumpRevision();
 }
 
-/** Oldest first, so sales sync in the order they were rung up. */
+/**
+ * Queue a customer record. Unlike sales, a later edit of the same customer
+ * replaces the payload and re-opens the entry, so the admin always ends up
+ * with the newest version no matter how many times the cashier edits offline.
+ */
+export async function enqueueCustomer(input: { id: string; payload: string }): Promise<void> {
+  const db = getDb();
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO outbox (id, kind, payload, status, attempts, last_error, created_at, updated_at, sent_at)
+     VALUES (?, 'customer', ?, 'pending', 0, NULL, ?, ?, NULL)
+     ON CONFLICT(id) DO UPDATE SET
+       payload = excluded.payload,
+       status = 'pending',
+       attempts = 0,
+       last_error = NULL,
+       updated_at = excluded.updated_at,
+       sent_at = NULL`,
+    input.id,
+    input.payload,
+    now,
+    now,
+  );
+  bumpRevision();
+}
+
+/**
+ * Oldest first, so sales sync in the order they were rung up. Customer records
+ * always drain ahead of anything else: a sale that references a customer can
+ * never reach the admin before that customer does.
+ */
 export async function listPending(): Promise<OutboxRecord[]> {
   const db = getDb();
   const rows = await db.getAllAsync<OutboxRow>(
-    "SELECT * FROM outbox WHERE status IN ('pending','failed') ORDER BY created_at ASC",
+    `SELECT * FROM outbox
+      WHERE status IN ('pending','failed')
+      ORDER BY CASE WHEN kind = 'customer' THEN 0 ELSE 1 END, created_at ASC`,
+  );
+  return rows.map(mapOutbox);
+}
+
+/** Everything currently stuck, newest first. Shown in the sync queue UI. */
+export async function listFailed(): Promise<OutboxRecord[]> {
+  const db = getDb();
+  const rows = await db.getAllAsync<OutboxRow>(
+    "SELECT * FROM outbox WHERE status = 'failed' ORDER BY updated_at DESC",
   );
   return rows.map(mapOutbox);
 }
@@ -122,6 +163,15 @@ export async function pendingCount(): Promise<number> {
   const db = getDb();
   const row = await db.getFirstAsync<{ c: number }>(
     "SELECT COUNT(*) AS c FROM outbox WHERE status IN ('pending','failed')",
+  );
+  return row?.c ?? 0;
+}
+
+/** How many queued entries are parked on an error (a subset of pendingCount). */
+export async function failedCount(): Promise<number> {
+  const db = getDb();
+  const row = await db.getFirstAsync<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM outbox WHERE status = 'failed'",
   );
   return row?.c ?? 0;
 }

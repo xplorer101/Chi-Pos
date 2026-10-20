@@ -382,6 +382,42 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 10,
+    name: 'customer_balance_snapshot',
+    sql: `
+      CREATE TABLE customer_balance_snapshot (
+        customer_id TEXT PRIMARY KEY NOT NULL,
+        owed INTEGER NOT NULL DEFAULT 0,
+        synced_at INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    version: 11,
+    name: 'outbox_customer_kind',
+    sql: `
+      CREATE TABLE outbox_v2 (
+        id TEXT PRIMARY KEY NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('sale','debt_payment','customer')),
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        sent_at INTEGER
+      );
+
+      INSERT INTO outbox_v2 (id, kind, payload, status, attempts, last_error, created_at, updated_at, sent_at)
+        SELECT id, kind, payload, status, attempts, last_error, created_at, updated_at, sent_at FROM outbox;
+
+      DROP TABLE outbox;
+      ALTER TABLE outbox_v2 RENAME TO outbox;
+
+      CREATE INDEX idx_outbox_status ON outbox(status, created_at);
+    `,
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

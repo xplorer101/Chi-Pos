@@ -38,6 +38,15 @@ export type CreateSaleInput = {
   payments: SalePaymentInput[];
   /** Business time of the sale. Defaults to now. */
   soldAt?: number;
+  /** Shared UUID, so a retried push is idempotent. Generated locally by default. */
+  id?: string;
+  /** The originating device, for multi-device attribution on the admin. */
+  deviceId?: string;
+  /**
+   * Skip the stock movements. Cashier phones do this: they never own the stock
+   * ledger, which the admin derives and mirrors back as a snapshot.
+   */
+  skipStockMovements?: boolean;
 };
 
 export class SaleError extends Error {}
@@ -68,9 +77,23 @@ export async function createSale(
   const meta = await newRowMeta();
   const soldAt = input.soldAt ?? meta.now;
   const discount = Math.max(0, Math.round(input.discount || 0));
+  const deviceId = input.deviceId ?? meta.deviceId;
 
   if (!input.lines.length) {
     throw new SaleError('Add at least one item to the sale.');
+  }
+
+  // Idempotent replay: a duplicate push (or a retry after a lost response)
+  // returns the already-stored sale rather than creating a second one.
+  if (input.id) {
+    const existing = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM sales WHERE id = ?',
+      input.id,
+    );
+    if (existing) {
+      const already = await getSaleWithDetails(input.id);
+      if (already) return already;
+    }
   }
 
   let saleId = '';
@@ -170,7 +193,7 @@ export async function createSale(
     }
 
     const receiptNo = await nextReceiptNo(txn);
-    saleId = meta.id;
+    saleId = input.id ?? meta.id;
 
     await txn.runAsync(
       `INSERT INTO sales
@@ -187,7 +210,7 @@ export async function createSale(
       actor.id,
       meta.now,
       meta.now,
-      meta.deviceId,
+      deviceId,
     );
 
     for (let i = 0; i < resolved.length; i += 1) {
@@ -212,10 +235,10 @@ export async function createSale(
         line.unitCost,
         lineMeta.now,
         lineMeta.now,
-        lineMeta.deviceId,
+        deviceId,
       );
 
-      if (line.tracksStock) {
+      if (line.tracksStock && !input.skipStockMovements) {
         const movementMeta = lineMetas[i].movement;
         await txn.runAsync(
           `INSERT INTO stock_movements
@@ -252,7 +275,7 @@ export async function createSale(
         actor.id,
         paymentMeta.now,
         paymentMeta.now,
-        paymentMeta.deviceId,
+        deviceId,
       );
     }
   });
@@ -261,6 +284,28 @@ export async function createSale(
   const sale = await getSaleWithDetails(saleId);
   if (!sale) throw new SaleError('Sale could not be read back.');
   return sale;
+}
+
+/** The authoritative receipt number for a sale, or null if it does not exist. */
+export async function getSaleReceiptNo(id: string): Promise<string | null> {
+  const db = getDb();
+  const row = await db.getFirstAsync<{ receipt_no: string }>(
+    'SELECT receipt_no FROM sales WHERE id = ? AND deleted_at IS NULL',
+    id,
+  );
+  return row?.receipt_no ?? null;
+}
+
+/** Replace a cashier's provisional receipt number with the admin's authoritative one. */
+export async function setSaleReceiptNo(id: string, receiptNo: string): Promise<void> {
+  const db = getDb();
+  await db.runAsync(
+    'UPDATE sales SET receipt_no = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+    receiptNo,
+    Date.now(),
+    id,
+  );
+  bumpRevision();
 }
 
 export async function getSaleWithDetails(id: string): Promise<SaleWithDetails | null> {

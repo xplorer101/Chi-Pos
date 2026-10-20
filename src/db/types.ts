@@ -164,11 +164,27 @@ export type CatalogStock = {
   quantityBase: number;
 };
 
+export type CatalogCustomer = {
+  id: string;
+  name: string;
+  phone: string | null;
+  notes: string | null;
+  updatedAt: number;
+  deletedAt: number | null;
+};
+
+export type CatalogBalance = {
+  customerId: string;
+  owed: number;
+};
+
 export type CatalogSnapshot = {
   serverTime: number;
   items: CatalogItem[];
   units: CatalogUnit[];
   stock: CatalogStock[];
+  customers: CatalogCustomer[];
+  balances: CatalogBalance[];
 };
 
 export interface StockMovement extends BaseEntity {

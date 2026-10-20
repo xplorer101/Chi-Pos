@@ -19,19 +19,29 @@ import type { ActingUser, Customer, CustomerWithBalance, Payment, Sale } from '.
  * A customer's balance is derived, never stored:
  *   credit sales (payments with a sale) add to what they owe,
  *   debt payments (payments without a sale) reduce it.
+ *
+ * On a cashier phone, payments only exist for what that phone has rung up, so
+ * the locally derived sum is incomplete. The admin therefore mirrors each
+ * customer's true balance into `customer_balance_snapshot`, which takes
+ * precedence when present. On the admin/standalone phone that table is empty
+ * and the derived sum is authoritative.
  */
 const OWED_SQL = `
-  COALESCE((
-    SELECT SUM(
-      CASE
-        WHEN p.sale_id IS NOT NULL AND p.method = 'credit' THEN p.amount
-        WHEN p.sale_id IS NULL THEN -p.amount
-        ELSE 0
-      END
-    )
-    FROM payments p
-    WHERE p.customer_id = c.id AND p.deleted_at IS NULL
-  ), 0) AS owed
+  COALESCE(
+    (SELECT cb.owed FROM customer_balance_snapshot cb WHERE cb.customer_id = c.id),
+    (
+      SELECT SUM(
+        CASE
+          WHEN p.sale_id IS NOT NULL AND p.method = 'credit' THEN p.amount
+          WHEN p.sale_id IS NULL THEN -p.amount
+          ELSE 0
+        END
+      )
+      FROM payments p
+      WHERE p.customer_id = c.id AND p.deleted_at IS NULL
+    ),
+    0
+  ) AS owed
 `;
 
 export type CustomerFilters = {
@@ -140,6 +150,78 @@ export async function updateCustomer(
   return updated!;
 }
 
+/**
+ * Apply a customer a cashier device pushed to the host. Idempotent by customer
+ * id: a replayed push overwrites the same row instead of creating a second one,
+ * so a retried outbox entry is safe. Returns true when the host had never seen
+ * this customer before.
+ */
+export async function upsertCustomerFromDevice(
+  actor: ActingUser,
+  input: {
+    id: string;
+    name: string;
+    phone?: string | null;
+    notes?: string | null;
+    updatedAt?: number;
+    deviceId?: string;
+  },
+): Promise<{ created: boolean }> {
+  assertPermission(actor, 'manage_customers');
+  const name = input.name.trim();
+  if (!name) throw new Error('Customer name is required.');
+  const db = getDb();
+  const existing = await db.getFirstAsync<{ id: string }>(
+    'SELECT id FROM customers WHERE id = ?',
+    input.id,
+  );
+  const now = Date.now();
+  const updatedAt = Number.isFinite(input.updatedAt) ? Math.min(input.updatedAt as number, now) : now;
+  const phone = input.phone?.trim() || null;
+  const notes = input.notes?.trim() || null;
+
+  if (existing) {
+    await db.runAsync(
+      `UPDATE customers SET name = ?, phone = ?, notes = ?, updated_at = ?
+        WHERE id = ?`,
+      name,
+      phone,
+      notes,
+      updatedAt,
+      input.id,
+    );
+  } else {
+    await db.runAsync(
+      `INSERT INTO customers (id, name, phone, notes, created_at, updated_at, deleted_at, device_id)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+      input.id,
+      name,
+      phone,
+      notes,
+      updatedAt,
+      updatedAt,
+      input.deviceId ?? '',
+    );
+  }
+  bumpRevision();
+  return { created: !existing };
+}
+
+/**
+ * Nudge a cashier's mirrored balance by `delta` kobo. Only touches rows that
+ * already exist: when there is no snapshot the locally derived sum is already
+ * correct and must stay authoritative.
+ */
+export async function adjustCustomerBalanceSnapshot(customerId: string, delta: number): Promise<void> {
+  if (!customerId || !Number.isFinite(delta) || delta === 0) return;
+  const db = getDb();
+  await db.runAsync(
+    'UPDATE customer_balance_snapshot SET owed = owed + ? WHERE customer_id = ?',
+    delta,
+    customerId,
+  );
+}
+
 export async function deleteCustomer(actor: ActingUser, id: string): Promise<void> {
   assertPermission(actor, 'delete_customer');
   const customer = await getCustomer(id);
@@ -213,6 +295,10 @@ export type DebtPaymentInput = {
   /** When the money was actually received. Defaults to now. */
   paidAt?: number;
   note?: string;
+  /** Shared UUID, so a retried push is idempotent. Generated locally by default. */
+  id?: string;
+  /** The originating device, for multi-device attribution on the admin. */
+  deviceId?: string;
 };
 
 /** Record a payment against what a customer owes (reduces their balance). */
@@ -230,19 +316,29 @@ export async function recordDebtPayment(
     throw new Error('Enter a valid payment date.');
   }
   const db = getDb();
+  if (input.id) {
+    const existing = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM payments WHERE id = ?',
+      input.id,
+    );
+    if (existing) return;
+  }
   const owed = await getCustomerOwed(input.customerId);
   if (amount > owed) {
     throw new Error('Payment is more than this customer owes.');
   }
 
   const meta = await newRowMeta();
+  const paymentId = input.id ?? meta.id;
+  const deviceId = input.deviceId ?? meta.deviceId;
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync(
       `INSERT INTO payments
          (id, sale_id, customer_id, method, amount, paid_at, note,
           user_id, created_at, updated_at, deleted_at, device_id)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
-      meta.id,
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+       ON CONFLICT(id) DO NOTHING`,
+      paymentId,
       input.customerId,
       input.method,
       amount,
@@ -251,7 +347,13 @@ export async function recordDebtPayment(
       actor.id,
       meta.now,
       meta.now,
-      meta.deviceId,
+      deviceId,
+    );
+    // Keep the cashier's mirrored balance honest until the next full sync.
+    await txn.runAsync(
+      'UPDATE customer_balance_snapshot SET owed = owed - ? WHERE customer_id = ?',
+      amount,
+      input.customerId,
     );
   });
   bumpRevision();

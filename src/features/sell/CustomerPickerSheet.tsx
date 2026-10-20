@@ -9,7 +9,8 @@ import { Text } from '@/components/Text';
 import { EmptyState } from '@/components/EmptyState';
 import { QueryErrorState } from '@/components/QueryErrorState';
 import { useLiveQuery } from '@/db/hooks';
-import { createCustomer, listCustomers } from '@/db/repositories/customersRepo';
+import { listCustomers } from '@/db/repositories/customersRepo';
+import { submitCustomer } from '@/features/net/salesQueue';
 import { useSessionStore } from '@/features/auth/sessionStore';
 import { formatMoney } from '@/lib/money';
 import { useTheme } from '@/theme/theme';
@@ -53,7 +54,7 @@ export function CustomerPickerSheet({ visible, onClose, selectedId, onSelect }: 
     setSaving(true);
     setError(null);
     try {
-      const customer = await createCustomer(actor, { name: newName, phone: newPhone });
+      const customer = await submitCustomer(actor, { name: newName, phone: newPhone });
       onSelect(customer.id, customer.name);
       reset();
       onClose();
